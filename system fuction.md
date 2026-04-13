@@ -15,7 +15,7 @@
 - Áp dụng khuyến mãi
 - Thanh toán (tiền mặt, chuyển khoản)
 - In hoá đơn
-2.3. Quản lý cho thuê truyện 🔥 (quan trọng nhất)
+2.3. Quản lý cho thuê truyện 
 - Tạo phiếu thuê
 - Chọn truyện để thuê
 - Quy định:
