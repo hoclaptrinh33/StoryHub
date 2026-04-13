@@ -67,4 +67,11 @@
 - Ai sửa gì
 - Khi nào
 - Tránh gian lận
+4.Đối tượng tác động vào chức năng hệ thống
 
+![sơ đồ use case](image.png)
+Tác nhân là quản lý
+Thực hiện các chức năng quản lý như: quản lý truyện , quản lý bán hàng, quản lý thuê truyện...
+
+5. Luồng xử lý các chức năng chính
+5.1
