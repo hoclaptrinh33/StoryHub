@@ -68,10 +68,33 @@
 - Khi nào
 - Tránh gian lận
 4.Đối tượng tác động vào chức năng hệ thống
-
 ![sơ đồ use case](image.png)
 Tác nhân là quản lý
 Thực hiện các chức năng quản lý như: quản lý truyện , quản lý bán hàng, quản lý thuê truyện...
+5. Luồng xử lý các tác vụ chính
+5.1 Luồng xử lý bán hàng
+    1. Nhân viên chọn "Tạo đơn hàng".
+    2. Hệ thống kiểm tra trạng thái truyện. Chỉ những truyện có trạng thái "Còn hàng" mới được thêm vào đơn.
+    3. Hệ thống tự động tính tổng tiền và áp dụng mã khuyến mãi (nếu có).
+    4. Khách hàng chọn phương thức (Tiền mặt/Chuyển khoản).
+    5. Hệ thống trừ số lượng tồn kho, in hóa đơn và ghi nhận vào lịch sử giao dịch.
+5.2 Luồng xử lý Cho thuê truyện
+    1. Tạo phiếu, chọn truyện (chỉ cho phép truyện trạng thái "Còn hàng").
+    2. Ghi nhận tiền cọc vào hệ thống thanh toán.
+    3. Hệ thống giảm số lượng truyện trạng thái " còn hàng"
+5.3 Luồng Quản lý Kho
+    Nhập hàng: Tăng số lượng tồn, cập nhật thông tin nhà xuất bản (NXB).
+    Xuất hàng:
+                + Nếu bán: Giảm số lượng tồn kho.
+                + Nếu cho thuê: giảm số lượng tạm thời
+5.4  Luồng Trả truyện
+    1. Tìm phiếu thuê đang mở.
+    2.Nhập ngày trả thực tế, kiểm tra hư hỏng/mất.
+    3. Hệ thống tính phí trễ (nếu có) và phí bồi thường.
+    4. Xác nhận thanh toán phát sinh (hoặc hoàn cọc).
+    5.Cập nhật trạng thái truyện thành "Còn hàng", tăng tồn kho, đóng phiếu.
+5.5 Luồng báo cáo 
+    1. Chọn loại báo cáo (doanh thu bán, doanh thu thuê, truyện hot, khách thân thiết).
+    2.Chọn khoảng thời gian.
+    3. Hệ thống tổng hợp và hiển thị dạng bảng/biểu đồ.
 
-5. Luồng xử lý các chức năng chính
-5.1
