@@ -1,0 +1,68 @@
+channel: item_live_updates
+description: Kenh realtime cap nhat trang thai item va settlement cho man hinh POS, Rental, Inventory.
+protocol: websocket
+
+connection:
+  path: /ws/item-live-updates
+  auth_required: true
+  heartbeat_interval_ms: 30000
+  reconnect_strategy: exponential_backoff
+  max_reconnect_attempts: 10
+
+events:
+  - name: item_status_changed
+    direction: server_to_client
+    payload:
+      type: object
+      properties:
+        item_id:
+          type: string
+        old_status:
+          type: string
+        new_status:
+          type: string
+        changed_at:
+          type: string
+          format: date-time
+        source_api:
+          type: string
+    related_api_event: event_item-status-changed
+    triggers_ui: ui_pos-main-kiosk
+    throttle_ms: 300
+  - name: rental_settlement_finished
+    direction: server_to_client
+    payload:
+      type: object
+      properties:
+        settlement_id:
+          type: string
+        contract_id:
+          type: string
+        total_fee:
+          type: number
+        refund_to_customer:
+          type: number
+        remaining_debt:
+          type: number
+        settled_at:
+          type: string
+          format: date-time
+    related_api_event: event_rental-settled
+    triggers_ui: ui_rental-return-inspection
+    throttle_ms: 200
+
+subscriptions:
+  - role: cashier
+    events: [item_status_changed, rental_settlement_finished]
+    filter: event.branch_id == current_user.branch_id
+  - role: manager
+    events: [item_status_changed, rental_settlement_finished]
+    filter: event.branch_id == current_user.branch_id
+  - role: owner
+    events: [item_status_changed, rental_settlement_finished]
+    filter: ""
+
+performance:
+  max_connections: 300
+  message_size_limit_kb: 64
+  buffer_size: 100

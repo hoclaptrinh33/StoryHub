@@ -1,0 +1,193 @@
+name: extendRentalContract
+description: Gia hạn phiếu thuê bằng cách cập nhật due_date mới và xử lý phần cọc bổ sung nếu cần.
+version: 0.1.0-blueprint
+deprecated: false
+status: blueprint
+tags: [rental, extension, due-date]
+category: rental/extension
+priority: high
+doc_ref: bp_rental-extend-contract_v1.md
+
+http:
+  method: POST
+  path: /api/v1/rentals/contracts/{contract_id}/extend
+  path_params:
+    contract_id:
+      type: string
+  query_params: {}
+  request_body:
+    type: object
+  content_type: application/json
+
+parameters:
+  type: object
+  required: [contract_id, new_due_date, request_id]
+  properties:
+    contract_id:
+      type: string
+      description: Hợp đồng cần gia hạn.
+    new_due_date:
+      type: string
+      format: date-time
+      description: Hạn trả mới sau gia hạn.
+    extension_reason:
+      type: string
+      description: Lý do gia hạn.
+    additional_deposit:
+      type: number
+      description: Tiền cọc bổ sung nếu policy yêu cầu.
+    request_id:
+      type: string
+      description: Idempotency key cho thao tác gia hạn.
+
+returns:
+  type: object
+  properties:
+    contract_id:
+      type: string
+    old_due_date:
+      type: string
+      format: date-time
+    new_due_date:
+      type: string
+      format: date-time
+    additional_fee:
+      type: number
+    additional_deposit:
+      type: number
+    status:
+      type: string
+      enum: [active, overdue]
+
+behavior:
+  deterministic: true
+  idempotent: true
+  retryable: true
+  side_effects: update-rental-contract
+  latency: low
+  cacheable: false
+
+errors:
+  - code: CONTRACT_NOT_FOUND
+    type: NotFoundError
+    http_status: 404
+    description: Không tìm thấy hợp đồng cần gia hạn.
+  - code: CONTRACT_ALREADY_CLOSED
+    type: PolicyError
+    http_status: 409
+    description: Hợp đồng đã đóng, không được gia hạn.
+  - code: INVALID_DUE_DATE
+    type: ValidationError
+    http_status: 400
+    description: new_due_date không hợp lệ so với due_date hiện tại.
+  - code: EXTENSION_NOT_ALLOWED
+    type: PolicyError
+    http_status: 403
+    description: Contract không đủ điều kiện gia hạn theo policy.
+
+auth:
+  required: true
+  type: Bearer Token
+  roles: [cashier, manager]
+  scopes: [rental:extend]
+
+dependencies:
+  requires:
+    [
+      authenticate,
+      lockRentalContract,
+      validateExtensionRules,
+      recalculateDeposit,
+      createAuditLog,
+    ]
+  provides: [rental_extension_context]
+  conflicts_with: [returnRentalItems]
+
+blueprint_tracking:
+  prompt_hash: sha256:39A7AF9101A919D4E08BDE915D0A5E02541CE5904112C4727797B817AAADB8AF
+  prompt_summary: Rental cần hỗ trợ gia hạn hợp đồng và xử lý cọc bổ sung theo chính sách.
+  assumptions:
+    - Gia hạn chỉ hợp lệ khi new_due_date lớn hơn due_date hiện tại.
+    - Mỗi contract có thể gia hạn nhiều lần nếu chưa đóng.
+    - Policy có thể yêu cầu thêm cọc cho mỗi lần gia hạn.
+  confidence: high
+  generated_at: 2026-04-13T23:08:30+07:00
+  generator_version: agent-skill-doc-generator@1.0
+
+implementation_notes:
+  suggested_tech_stack: [FastAPI, SQLAlchemy, policy engine]
+  open_questions:
+    - Có giới hạn số lần gia hạn tối đa trên một contract không?
+    - Có thu thêm phí gia hạn cố định hay theo ngày?
+  acceptance_criteria:
+    - Gia hạn cập nhật đúng due_date và ghi audit before/after.
+    - Không thể gia hạn contract đã closed.
+    - request_id trùng không phát sinh gia hạn trùng.
+
+testing:
+  contract_tests:
+    - name: should_extend_contract_successfully
+      type: happy_path
+      auto_generate: true
+      input:
+        contract_id: RCT-0001
+        new_due_date: "2026-04-28T23:59:59+07:00"
+        request_id: req-ext-001
+      expected_status: 200
+    - name: should_fail_when_due_date_invalid
+      type: error_case
+      auto_generate: true
+      input:
+        contract_id: RCT-0001
+        new_due_date: "2026-04-10T23:59:59+07:00"
+        request_id: req-ext-002
+      expected_status: 400
+      expected_error:
+        code: INVALID_DUE_DATE
+    - name: should_fail_without_auth
+      type: auth_check
+      auto_generate: true
+      expected_status: 401
+  mock:
+    enabled: true
+    output_path: mocks/bp_rental-extend-contract_v1.mock.json
+    happy_path:
+      delay_ms: 140
+      response:
+        contract_id: RCT-0001
+        old_due_date: "2026-04-21T23:59:59+07:00"
+        new_due_date: "2026-04-28T23:59:59+07:00"
+        status: active
+    error_cases:
+      - error_code: CONTRACT_NOT_FOUND
+        delay_ms: 70
+      - error_code: CONTRACT_ALREADY_CLOSED
+        delay_ms: 70
+      - error_code: INVALID_DUE_DATE
+        delay_ms: 50
+  frontend_scenarios:
+    - scenario: extend_loading
+      description: Nút gia hạn hiển thị loading khi submit.
+      mock_config:
+        delay_ms: 1800
+      ui_state: loading
+      assertions:
+        - extend button disabled
+        - spinner visible
+    - scenario: extend_success
+      description: Gia hạn thành công hiển thị due date mới.
+      mock_config:
+        status: 200
+      ui_state: success
+      assertions:
+        - new due date shown
+        - success toast visible
+    - scenario: extend_invalid_date_error
+      description: Due date không hợp lệ hiển thị lỗi inline.
+      mock_config:
+        status: 400
+        error_code: INVALID_DUE_DATE
+      ui_state: error
+      assertions:
+        - due date error visible
+        - submit blocked

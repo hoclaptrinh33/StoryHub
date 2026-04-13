@@ -1,0 +1,182 @@
+name: createSystemBackup
+description: Tạo backup dữ liệu hệ thống theo chế độ full hoặc incremental, ghi audit và trả trạng thái job.
+version: 0.1.0-blueprint
+deprecated: false
+status: blueprint
+tags: [system, backup, resilience]
+category: system/backup
+priority: high
+doc_ref: bp_system-create-backup_v1.md
+
+http:
+  method: POST
+  path: /api/v1/system/backups
+  path_params: {}
+  query_params: {}
+  request_body:
+    type: object
+  content_type: application/json
+
+parameters:
+  type: object
+  required: [backup_type, request_id]
+  properties:
+    backup_type:
+      type: string
+      enum: [full, incremental]
+    include_media:
+      type: boolean
+      default: false
+    encryption_password_ref:
+      type: string
+      description: Tham chiếu khóa hoặc secret để mã hóa backup.
+    request_id:
+      type: string
+      description: Idempotency key cho backup job.
+
+returns:
+  type: object
+  properties:
+    backup_job_id:
+      type: string
+    status:
+      type: string
+      enum: [queued, running, success, failed]
+    file_path:
+      type: string
+    checksum:
+      type: string
+    created_at:
+      type: string
+      format: date-time
+
+behavior:
+  deterministic: false
+  idempotent: true
+  retryable: true
+  side_effects: create-backup-artifact
+  latency: high
+  cacheable: false
+
+errors:
+  - code: BACKUP_STORAGE_UNAVAILABLE
+    type: ServiceUnavailableError
+    http_status: 503
+    description: Không ghi được backup vào storage đích.
+  - code: ENCRYPTION_KEY_NOT_FOUND
+    type: ValidationError
+    http_status: 400
+    description: Không tìm thấy cấu hình khóa mã hóa theo reference.
+  - code: BACKUP_ALREADY_RUNNING
+    type: ConflictError
+    http_status: 409
+    description: Đã có backup job đang chạy.
+  - code: BACKUP_JOB_TIMEOUT
+    type: TimeoutError
+    http_status: 504
+    description: Backup vượt quá thời gian cho phép.
+
+auth:
+  required: true
+  type: Bearer Token
+  roles: [manager, owner]
+  scopes: [system:backup]
+
+dependencies:
+  requires:
+    [
+      authenticate,
+      acquireBackupLock,
+      exportDatabase,
+      encryptBackup,
+      createAuditLog,
+    ]
+  provides: [backup_job_context]
+  conflicts_with: [restoreSystemBackup]
+
+blueprint_tracking:
+  prompt_hash: sha256:39A7AF9101A919D4E08BDE915D0A5E02541CE5904112C4727797B817AAADB8AF
+  prompt_summary: Hệ thống bắt buộc có backup dữ liệu và truy vết thao tác người dùng.
+  assumptions:
+    - Backup chạy dạng job bất đồng bộ để không chặn POS.
+    - Mỗi thời điểm chỉ cho một backup job active.
+    - Backup thành công phải có checksum để verify tính toàn vẹn.
+  confidence: high
+  generated_at: 2026-04-13T23:08:30+07:00
+  generator_version: agent-skill-doc-generator@1.0
+
+implementation_notes:
+  suggested_tech_stack: [FastAPI background tasks, encrypted file storage]
+  open_questions:
+    - Vị trí lưu backup mặc định là local disk hay cloud sync folder?
+    - Chu kỳ dọn dẹp backup cũ sẽ theo retention bao nhiêu ngày?
+  acceptance_criteria:
+    - Tạo backup thành công phải trả backup_job_id và checksum.
+    - Khi backup đang chạy, request mới phải bị chặn đúng policy.
+    - Tất cả thao tác backup phải ghi audit log.
+
+testing:
+  contract_tests:
+    - name: should_create_backup_job_successfully
+      type: happy_path
+      auto_generate: true
+      input:
+        backup_type: full
+        request_id: req-bkp-001
+      expected_status: 200
+    - name: should_fail_when_backup_already_running
+      type: error_case
+      auto_generate: true
+      input:
+        backup_type: incremental
+        request_id: req-bkp-002
+      expected_status: 409
+      expected_error:
+        code: BACKUP_ALREADY_RUNNING
+    - name: should_fail_without_auth
+      type: auth_check
+      auto_generate: true
+      expected_status: 401
+  mock:
+    enabled: true
+    output_path: mocks/bp_system-create-backup_v1.mock.json
+    happy_path:
+      delay_ms: 300
+      response:
+        backup_job_id: BKP-0001
+        status: queued
+        file_path: backups/full-0001.bak
+        checksum: sha256:abc123
+    error_cases:
+      - error_code: BACKUP_STORAGE_UNAVAILABLE
+        delay_ms: 120
+      - error_code: BACKUP_ALREADY_RUNNING
+        delay_ms: 70
+      - error_code: BACKUP_JOB_TIMEOUT
+        delay_ms: 200
+  frontend_scenarios:
+    - scenario: backup_start_loading
+      description: Nút tạo backup hiển thị loading khi gửi job.
+      mock_config:
+        delay_ms: 2000
+      ui_state: loading
+      assertions:
+        - start backup button disabled
+        - job spinner visible
+    - scenario: backup_job_created
+      description: Tạo job thành công hiển thị job id và trạng thái queued.
+      mock_config:
+        status: 200
+      ui_state: success
+      assertions:
+        - backup job id shown
+        - status badge shows queued
+    - scenario: backup_conflict_error
+      description: Đã có backup đang chạy thì hiển thị cảnh báo conflict.
+      mock_config:
+        status: 409
+        error_code: BACKUP_ALREADY_RUNNING
+      ui_state: error
+      assertions:
+        - conflict warning visible
+        - retry action hidden

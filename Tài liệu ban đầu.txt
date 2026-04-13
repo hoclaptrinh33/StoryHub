@@ -1,0 +1,540 @@
+---
+
+# 🧠 1. Tổng thể hệ thống
+
+App gồm 6 khối chính:
+
+1. **Inventory (Kho)**
+2. **CRM (Khách hàng)**
+3. **POS (Bán hàng)**
+4. **Rental (Cho thuê)**
+5. **Report (Báo cáo)**
+6. **System (Hệ thống & tích hợp)**
+
+---
+
+# 📦 2. Thiết kế dữ liệu chuẩn (QUAN TRỌNG NHẤT)
+
+## Phải tách 3 tầng:
+
+### 1. Title (Đầu truyện)
+
+* name
+* author
+* publisher
+* genre
+* description
+
+---
+
+### 2. Volume (Tập)
+
+* title_id
+* volume_number (tập 1,2,3)
+* ISBN (nếu có)
+
+---
+
+### 3. Item (Cuốn vật lý – đơn vị thật)
+
+* id (SKU / barcode)
+* volume_id
+* condition (100%, 80%, rách…)
+* status:
+
+  * available
+  * rented
+  * sold
+* health (%)
+* notes (lỗi)
+
+👉 **Toàn bộ thuê/bán = thao tác trên Item**
+
+---
+
+# 👤 3. CRM (Khách hàng)
+
+* name
+* phone
+* address
+* membership_level
+* deposit_balance
+* debt
+* blacklist_flag
+
+---
+
+# 💰 4. POS (Bán hàng)
+
+## Chức năng:
+
+* tạo đơn
+* thêm item
+* discount (% / tiền)
+* thanh toán
+
+## BẮT BUỘC có:
+
+* hủy đơn
+* hoàn tiền
+* sửa đơn
+* split payment
+
+---
+
+# 📚 5. Rental (Cốt lõi)
+
+## Tạo phiếu thuê:
+
+* customer_id
+* list item
+* rent_date
+* due_date
+* deposit
+
+---
+
+## Khi trả:
+
+### Flow chuẩn:
+
+1. scan item
+2. check tình trạng
+3. tính phí:
+
+   * phí thuê
+   * phí quá hạn
+   * phí hỏng
+4. trừ vào cọc
+5. hoàn tiền
+
+---
+
+## Phải xử lý thêm:
+
+* mất truyện
+* trả thiếu
+* gia hạn
+* trả nhiều lần
+
+---
+
+# 📊 6. Inventory & Tracking nâng cao
+
+## Theo dõi từng item:
+
+* lịch sử thuê
+* lịch sử lỗi
+
+## Timeline:
+
+* mỗi lần thuê → update condition
+* lưu log
+
+👉 nâng cấp:
+
+* lưu ảnh trước/sau (rất mạnh)
+
+---
+
+# 🤖 7. Auto-fetch Metadata
+
+## Input:
+
+* tên truyện / ISBN
+
+## Output:
+
+* auto fill:
+
+  * author
+  * genre
+  * description
+  * cover
+
+## Lưu ý:
+
+* cache local
+* fallback nếu API chết
+
+---
+
+# 🧾 8. Report
+
+* doanh thu bán
+* doanh thu thuê
+* tiền phạt
+* top truyện:
+
+  * bán
+  * thuê
+* cảnh báo tồn kho
+
+---
+
+# ⚙️ 9. System
+
+## Bắt buộc:
+
+* RBAC (phân quyền)
+* logging (ai sửa gì)
+* backup dữ liệu
+
+---
+
+## Tích hợp:
+
+* barcode scanner
+* NFC (optional)
+
+---
+
+# 🧱 10. Kiến trúc đề xuất
+
+## Stack:
+
+* Frontend: Vue 3 + Tauri
+* Backend: FastAPI
+* DB: SQLAlchemy + SQLite + SQLCipher(Migration)
+
+---
+
+## Nguyên tắc:
+
+* chạy **offline-first**
+* backend chạy local
+* sync nếu cần
+
+---
+
+# ⚠️ 11. Những thứ bắt buộc phải có (nếu không sẽ fail)
+
+* lock item (tránh 2 người thuê cùng 1 cuốn)
+* audit log
+* backup
+* xử lý lỗi transaction
+
+---
+
+
+Bổ sung :
+Snapshot giá tại thời điểm giao dịch
+
+Nếu không lưu snapshot:
+
+sau này đổi giá → lịch sử sai hết
+Thiết kế bổ sung:
+OrderItem / RentalItem:
+final_sell_price
+final_rent_price
+final_deposit
+
+👉 luôn lưu giá đã dùng lúc giao dịch
+
+📦 2. Reservation (Giữ chỗ) → ✔ đúng, nhưng chưa đủ
+Thêm status:
+reserved
+❗ Nhưng chỉ status là chưa đủ
+
+Phải có:
+
+reserved_by_customer_id
+reserved_at
+reservation_expire_at
+❗ Cronjob thôi là chưa an toàn
+
+👉 Chuẩn hơn:
+
+check expire real-time khi query
+cron cleanup
+Edge case cần xử:
+khách không lấy → auto release
+khách đến → convert:
+reserved → sold / rented
+
+3. Barcode UX
+Máy quét mã vạch thực chất hoạt động như một bàn phím (nó gõ chuỗi ID siêu nhanh rồi tự bấm Enter).
+
+Nếu thiết kế theo kiểu nhân viên phải dùng chuột click vào ô input rồi mới quét mã, tốc độ bán hàng sẽ rất chậm.
+
+Giải pháp cho Frontend: phải viết một Global Event Listener trong Vue 3 để lắng nghe sự kiện bàn phím. Chỉ cần nhân viên quét mã (dù đang không focus vào ô input nào), hệ thống vẫn tự động bắt được chuỗi SKU và ném item đó vào giỏ hàng/phiếu thuê.
+Thiết kế chuẩn:
+Không dùng input focus
+Dùng:
+global key listener
+Nhưng phải thêm buffer logic:
+scanner input:
+"8938505974190\n"
+Cần:
+buffer string
+detect tốc độ gõ nhanh → coi là scanner
+timeout ~50ms để reset
+❗ Nếu không:
+user gõ tay → bị hiểu nhầm là scan
+Bonus (quan trọng):
+disable hotkey khi đang scan
+auto add vào cart / rental
+
+
+Quan trọng hơn DB:
+Audit log
+
+Phải có:
+
+ai sửa gì
+sửa lúc nào
+giá trị trước/sau
+
+👉 cái này mới chống gian lận thật
+
+🔥 5. Những thứ m chưa nhắc nhưng phải có (critical)
+5.1. Transaction locking
+
+👉 tránh:
+
+2 người thuê cùng 1 item
+5.2. Idempotency
+
+👉 tránh:
+
+scan 2 lần → add 2 lần
+5.3. Soft delete
+
+👉 không xóa thật:
+
+tránh mất data
+giữ lịch sử
+5.4. Data validation
+
+👉 tránh:
+
+âm tiền
+trả quá số lượng
+
+
+
+Tiêu chí UI/UX
+1. Nguyên tắc số 1: “Nhanh hơn suy nghĩ”
+
+👉 Nhân viên không được “nghĩ”, chỉ thao tác
+
+scan → vào giỏ ngay
+bấm → ra kết quả ngay
+không popup rườm rà
+
+❌ Sai phổ biến:
+
+click nhiều bước
+form dài
+confirm liên tục
+⚡ 2. Tối ưu cho barcode (bắt buộc)
+UI phải:
+không cần focus input
+scan là auto add
+Feedback phải có:
+âm thanh “beep”
+highlight item vừa thêm
+
+👉 Nếu không:
+
+nhân viên không biết scan thành công chưa
+🧠 3. Layout chuẩn POS (đừng sáng tạo linh tinh)
+1 màn hình chính gồm 3 vùng:
+🟢 Trái: tìm / scan
+ô tìm kiếm (optional)
+scan barcode
+🟡 Giữa: giỏ hàng / phiếu thuê
+list item
+số lượng
+giá
+trạng thái
+🔴 Phải: thanh toán
+tổng tiền
+discount
+nút thanh toán lớn
+
+👉 Đây là layout chuẩn industry, đừng phá
+
+👀 4. Trạng thái phải “nhìn phát hiểu ngay”
+
+Ví dụ item:
+
+xanh → available
+vàng → reserved
+đỏ → rented
+
+👉 không đọc text, chỉ nhìn màu
+
+🔁 5. Flow cực kỳ ngắn
+Bán:
+
+scan → thấy item → enter → xong
+
+Thuê:
+
+scan → chọn khách → enter → xong
+
+Trả:
+
+scan → auto detect phiếu → enter → xong
+
+👉 mục tiêu:
+≤ 3 bước / hành động
+
+🧱 6. Không để user nhập nếu có thể chọn
+
+❌ nhập tay:
+
+giá
+trạng thái
+
+✔ thay bằng:
+
+button
+dropdown
+preset
+🧯 7. Chống lỗi người dùng (cực quan trọng)
+
+UI phải:
+
+chặn sai ngay từ đầu
+
+Ví dụ:
+
+scan item đã thuê → báo đỏ ngay
+trả sai item → cảnh báo
+🔊 8. Feedback rõ ràng
+
+Mỗi hành động phải có:
+
+màu (visual)
+âm thanh
+animation nhẹ
+
+👉 để nhân viên:
+
+không phải đoán
+📱 9. Responsive theo kiểu “kiosk”, không phải web
+
+App m:
+
+chạy desktop
+màn hình cố định
+
+👉 ưu tiên:
+
+to, rõ, dễ bấm
+không cần responsive mobile
+🔐 10. Phân quyền UI
+nhân viên:
+chỉ bán / thuê
+quản lý:
+chỉnh giá
+xóa đơn
+
+👉 không được để ai cũng thấy mọi thứ
+
+🧪 11. Test thực tế (quan trọng hơn design)
+
+👉 đưa cho người khác dùng thử:
+
+họ có hỏi lại không?
+có bấm nhầm không?
+có chậm không?
+
+👉 nếu có → UI fail
+
+🔥 12. Những sai lầm phổ biến
+làm UI “đẹp” nhưng chậm
+quá nhiều popup
+bắt nhập quá nhiều
+không hỗ trợ keyboard
+không tối ưu scan
+
+
+🔥 1. “Keyboard-first / Không dùng chuột” → ✔ ĐÚNG, nhưng đừng cực đoan
+👍 Điểm mạnh
+Tư duy này rất chuẩn cho POS
+Tăng tốc độ thao tác rõ rệt
+Giảm sai sót khi quầy đông
+
+👉 Cái này nên là nguyên tắc cốt lõi
+
+⚠️ Nhưng câu “tuyệt đối không dùng chuột” → sai nhẹ
+
+👉 Thực tế:
+
+vẫn cần chuột cho:
+case hiếm (sửa lỗi, chọn lại item)
+nhân viên mới
+✅ Chuẩn hơn:
+
+👉 Keyboard-first, Mouse-optional
+
+🔧 Tiêu chuẩn nên chốt:
+F1: thanh toán
+F2: tìm khách
+ESC: clear giỏ
+↑ ↓: chọn item
+Enter: confirm
+
+👉 + global listener (VueUse) → chuẩn
+
+⚡ 2. Flow trả truyện + Inspection Mode → ✔ CỰC CHUẨN
+
+Cái này là điểm ăn tiền thật sự, m đang đi đúng hướng.
+
+👍 Điểm mạnh:
+xử lý real-world case
+không cần mở popup
+thao tác cực nhanh
+❗ Nhưng cần nâng cấp thêm 1 chút:
+2.1. Đừng chỉ có 3 trạng thái cứng
+
+👉 nên cho:
+
+config rule từ backend
+
+Ví dụ:
+
+shop A: phạt 20%
+shop B: phạt 50%
+2.2. Flow chuẩn nên là:
+scan → auto add → (default: Tốt)
+↓
+nhấn 1/2/3 → đổi trạng thái
+↓
+auto tính tiền
+2.3. Bonus (rất đáng làm):
+hiển thị luôn:
+tiền bị trừ
+còn lại bao nhiêu cọc
+
+👉 giúp nhân viên không phải tính
+
+👀 3. Color + Icon → ✔ CHUẨN, thậm chí bắt buộc
+👍 M nói đúng:
+màn hình kém
+mù màu
+ánh sáng ngoài trời
+
+👉 chỉ dùng màu = sai
+
+✅ Chuẩn UI production:
+Mỗi trạng thái phải có:
+màu
+icon
+text
+Ví dụ chuẩn:
+🟢 ✔️ Sẵn sàng
+🟡 ⏳ Đã đặt
+🔴 🔒 Đang thuê
+❗ Nhưng thêm 1 cái nữa m chưa nói:
+
+👉 không phụ thuộc màu nền
+
+→ dùng:
+
+badge
+icon
+label rõ ràng

@@ -1,0 +1,65 @@
+entity: RentalContract
+description: Hợp đồng thuê quản lý vòng đời item thuê, tiền cọc, phí phát sinh và công nợ sau settlement.
+bounded_context: rental
+
+invariants:
+  - rule: Contract active phải có ít nhất một rental_item trạng thái rented.
+    enforced_by: bp_rental-create-contract_v1
+    violation_error: EMPTY_RENTAL_CONTRACT
+    severity: block
+  - rule: Mọi rental_item phải lưu final_rent_price và final_deposit tại thời điểm tạo contract.
+    enforced_by: bp_rental-create-contract_v1
+    violation_error: SNAPSHOT_MISSING
+    severity: block
+  - rule: Settlement không được tạo giá trị âm cho total_fee, deducted_from_deposit, refund_to_customer.
+    enforced_by: bp_rental-return-items_v1
+    violation_error: INVALID_SETTLEMENT_AMOUNT
+    severity: block
+  - rule: Contract closed không được gia hạn hoặc trả thêm item.
+    enforced_by: bp_rental-extend-contract_v1 + bp_rental-return-items_v1
+    violation_error: CONTRACT_ALREADY_CLOSED
+    severity: block
+
+aggregate:
+  root: RentalContract
+  children: [RentalItem, RentalSettlement]
+  consistency: strong
+
+relationships:
+  - target: Customer
+    type: many-to-one
+    cascade: restrict
+    description: Mỗi contract thuộc một khách hàng.
+  - target: Item
+    type: one-to-many
+    cascade: restrict
+    description: Contract chứa nhiều item thuê.
+
+business_rules:
+  - name: Partial return allowed
+    description: Hợp đồng cho phép trả nhiều lần, trạng thái chuyển partial_returned cho tới khi trả đủ.
+    applies_to: [bp_rental-return-items_v1]
+    configurable: false
+  - name: Overdue fee policy
+    description: Phí quá hạn và phí hỏng có thể cấu hình theo từng cửa hàng.
+    applies_to: [bp_rental-return-items_v1, bp_rental-extend-contract_v1]
+    configurable: true
+
+value_objects:
+  - name: ContractStatus
+    type: string
+    constraints: enum [active, partial_returned, overdue, closed, cancelled]
+  - name: MoneyAmount
+    type: number
+    constraints: value >= 0
+
+emits_events:
+  - rental_contract_created
+  - rental_item_returned
+  - rental_settled
+  - rental_extended
+
+related_apis:
+  - bp_rental-create-contract_v1
+  - bp_rental-return-items_v1
+  - bp_rental-extend-contract_v1

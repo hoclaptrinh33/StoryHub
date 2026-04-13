@@ -1,0 +1,287 @@
+name: returnRentalItems
+description: Nhận trả item theo contract, kiểm định tình trạng và tính settlement gồm phí thuê, trễ hạn, hỏng hoặc mất.
+version: 0.1.0-blueprint
+deprecated: false
+status: blueprint
+tags: [rental, return, settlement]
+category: rental/settlement
+priority: high
+doc_ref: bp_rental-return-items_v1.md
+
+http:
+  method: POST
+  path: /api/v1/rentals/contracts/{contract_id}/return
+  path_params:
+    contract_id:
+      type: string
+  query_params: {}
+  request_body:
+    type: object
+  content_type: application/json
+
+parameters:
+  type: object
+  required: [contract_id, return_lines, request_id]
+  properties:
+    contract_id:
+      type: string
+      description: Phiếu thuê cần xử lý trả.
+    return_lines:
+      type: array
+      items:
+        type: object
+      description: Danh sách item trả với condition sau trả.
+    returned_at:
+      type: string
+      format: date-time
+      description: Thời điểm nhận trả.
+    request_id:
+      type: string
+      description: Idempotency key cho settlement.
+
+returns:
+  type: object
+  properties:
+    settlement_id:
+      type: string
+    contract_id:
+      type: string
+    rental_fee:
+      type: number
+    late_fee:
+      type: number
+    damage_fee:
+      type: number
+    lost_fee:
+      type: number
+    total_fee:
+      type: number
+    deducted_from_deposit:
+      type: number
+    refund_to_customer:
+      type: number
+    remaining_debt:
+      type: number
+    contract_status:
+      type: string
+      enum: [partial_returned, closed]
+
+behavior:
+  deterministic: true
+  idempotent: true
+  retryable: true
+  side_effects: update-item-condition-and-create-settlement
+  latency: medium
+  cacheable: false
+  preconditions:
+    - condition: contract tồn tại và chưa ở terminal state
+      check_via: rental_contract_lookup
+      error_if_false: CONTRACT_NOT_FOUND
+    - condition: mọi item trong return_lines thuộc contract hiện tại
+      check_via: rental_contract_items_lookup
+      error_if_false: ITEM_NOT_IN_CONTRACT
+  postconditions:
+    - effect: tạo settlement record với breakdown phí
+      verifiable: true
+      verify_via: rental_settlement_lookup
+    - effect: contract_status cập nhật partial_returned hoặc closed
+      verifiable: true
+      verify_via: rental_contract_lookup
+  side_effect_scope:
+    reads: [rental_contract, rental_item, fee_policy, runtime_config]
+    writes:
+      [rental_settlement, rental_contract, item, customer_finance, audit_log]
+    external: [notification_service]
+  failure_strategy:
+    CONTRACT_NOT_FOUND:
+      action: abort
+      max_retries: 0
+      backoff: fixed
+      backoff_base_ms: 0
+      alert: false
+    RETURN_DUPLICATED:
+      action: skip
+      max_retries: 0
+      backoff: fixed
+      backoff_base_ms: 0
+      alert: false
+    INVALID_CONDITION_TRANSITION:
+      action: abort
+      max_retries: 0
+      backoff: fixed
+      backoff_base_ms: 0
+      alert: false
+  frontend:
+    loading_strategy: overlay
+    error_surface: toast
+    empty_state: illustration
+    cache_strategy: none
+    retry_ui: true
+    optimistic_updates: true
+
+errors:
+  - code: CONTRACT_NOT_FOUND
+    type: NotFoundError
+    http_status: 404
+    description: Không tìm thấy contract.
+  - code: ITEM_NOT_IN_CONTRACT
+    type: ValidationError
+    http_status: 400
+    description: return_lines chứa item không thuộc contract.
+  - code: RETURN_DUPLICATED
+    type: ConflictError
+    http_status: 409
+    description: Item đã được ghi nhận trả trước đó.
+  - code: INVALID_CONDITION_TRANSITION
+    type: ValidationError
+    http_status: 400
+    description: Trạng thái kiểm định không hợp lệ.
+
+auth:
+  required: true
+  type: Bearer Token
+  roles: [cashier, manager]
+  scopes: [rental:return]
+  permissions:
+    - role: cashier
+      access: conditional
+      condition: user.branch_id == resource.branch_id
+      fields_allowed: [contract_id, return_lines, returned_at, request_id]
+      fields_denied: [manual_fee_override]
+    - role: manager
+      access: full
+      condition: ""
+      fields_allowed: []
+      fields_denied: []
+  frontend_auth:
+    hide_actions: [button_override_fee]
+    disable_actions: [input_manual_fee_adjustment]
+    route_guard:
+      min_role: cashier
+      redirect_to: /403
+      show_message: Bạn không có quyền xử lý trả truyện.
+  data_filtering:
+    auto_filter: true
+    filter_field: branch_id
+
+dependencies:
+  requires:
+    - tool: authenticate
+      order: 1
+      mandatory: true
+      provides_data: auth_context
+    - tool: lockRentalContract
+      order: 2
+      mandatory: true
+      provides_data: contract_lock
+    - tool: calculateSettlementFees
+      order: 3
+      mandatory: true
+      provides_data: fee_breakdown
+    - tool: createAuditLog
+      order: 4
+      mandatory: false
+      provides_data: audit_record
+  conditional:
+    - tool: managerFeeOverrideApproval
+      condition: request has manual_fee_override
+  fallback:
+    - tool: defaultFeeRuleEngine
+      replaces: shopSpecificFeeRuleEngine
+      when: shop_policy_unavailable
+      degraded: true
+  provides: [rental_settlement_context]
+  conflicts_with: [extendRentalContract]
+  conflict_reason: contract không được settle và extend đồng thời
+
+blueprint_tracking:
+  prompt_hash: sha256:39A7AF9101A919D4E08BDE915D0A5E02541CE5904112C4727797B817AAADB8AF
+  prompt_summary: Luồng trả truyện gồm scan, kiểm định, tính phí, trừ cọc và hoàn tiền, hỗ trợ mất hoặc trả thiếu.
+  assumptions:
+    - condition_after chuẩn gồm good, minor_damage, major_damage, lost.
+    - Settlement có thể chạy nhiều lần cho contract partial_returned.
+    - Mỗi return_lines cần gắn item_id duy nhất trong request.
+  confidence: high
+  generated_at: 2026-04-13T23:08:30+07:00
+  generator_version: agent-skill-doc-generator@1.0
+
+implementation_notes:
+  suggested_tech_stack: [FastAPI, SQLAlchemy, fee rule engine]
+  open_questions:
+    - Rule tính phí hỏng có cấu hình theo từng cửa hàng không?
+    - Có cho phép override phí bằng quyền manager tại quầy không?
+  acceptance_criteria:
+    - Settlement trả đúng breakdown phí và số tiền hoàn hoặc nợ.
+    - Trả một phần phải giữ contract ở trạng thái partial_returned.
+    - Mọi thay đổi condition item đều ghi audit log.
+
+testing:
+  contract_tests:
+    - name: should_settle_partial_return
+      type: happy_path
+      auto_generate: true
+      input:
+        contract_id: RCT-0001
+        return_lines:
+          - item_id: ITM-0003
+            condition_after: good
+        request_id: req-rtn-001
+      expected_status: 200
+    - name: should_fail_for_item_not_in_contract
+      type: error_case
+      auto_generate: true
+      input:
+        contract_id: RCT-0001
+        return_lines:
+          - item_id: ITM-9999
+            condition_after: good
+        request_id: req-rtn-002
+      expected_status: 400
+      expected_error:
+        code: ITEM_NOT_IN_CONTRACT
+    - name: should_fail_without_auth
+      type: auth_check
+      auto_generate: true
+      expected_status: 401
+  mock:
+    enabled: true
+    output_path: mocks/bp_rental-return-items_v1.mock.json
+    happy_path:
+      delay_ms: 220
+      response:
+        settlement_id: RST-0001
+        contract_status: partial_returned
+        total_fee: 45000
+    error_cases:
+      - error_code: CONTRACT_NOT_FOUND
+        delay_ms: 90
+      - error_code: ITEM_NOT_IN_CONTRACT
+        delay_ms: 90
+      - error_code: RETURN_DUPLICATED
+        delay_ms: 90
+  frontend_scenarios:
+    - scenario: return_loading
+      description: Hiển thị settling overlay khi gửi settlement.
+      mock_config:
+        delay_ms: 2500
+      ui_state: settling
+      assertions:
+        - submit button disabled
+        - settlement overlay visible
+    - scenario: return_success
+      description: Trả thành công hiển thị breakdown phí và tiền hoàn.
+      mock_config:
+        status: 200
+      ui_state: success
+      assertions:
+        - total fee visible
+        - refund or debt field visible
+    - scenario: invalid_item_error
+      description: Scan sai item phải báo đỏ ngay.
+      mock_config:
+        status: 400
+        error_code: ITEM_NOT_IN_CONTRACT
+      ui_state: error
+      assertions:
+        - error toast visible
+        - invalid item rejected

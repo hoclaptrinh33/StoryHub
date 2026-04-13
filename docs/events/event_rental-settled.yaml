@@ -1,0 +1,68 @@
+event: rental_settled
+description: Phát ra khi settlement phiếu thuê hoàn tất, bao gồm phí và kết quả hoàn cọc hoặc ghi nợ.
+domain: rental
+severity: critical
+
+triggered_by: bp_rental-return-items_v1
+trigger_condition: settlement tạo thành công và contract trạng thái closed hoặc partial_returned.
+
+payload:
+  type: object
+  required:
+    [
+      settlement_id,
+      contract_id,
+      customer_id,
+      total_fee,
+      deducted_from_deposit,
+      refund_to_customer,
+      remaining_debt,
+      settled_at,
+    ]
+  properties:
+    settlement_id:
+      type: string
+    contract_id:
+      type: string
+    customer_id:
+      type: string
+    total_fee:
+      type: number
+    deducted_from_deposit:
+      type: number
+    refund_to_customer:
+      type: number
+    remaining_debt:
+      type: number
+    settled_at:
+      type: string
+      format: date-time
+
+consumers:
+  - name: update_customer_finance
+    action: Đồng bộ debt và deposit_balance trong CRM.
+    async: false
+    required: true
+    failure_strategy: retry
+    max_retries: 3
+  - name: push_report_aggregates
+    action: Cập nhật revenue rental và penalty cho báo cáo.
+    async: true
+    required: false
+    failure_strategy: retry
+    max_retries: 5
+  - name: notify_cashier_ui
+    action: Hiển thị kết quả settle trên màn hình trả truyện.
+    async: true
+    required: false
+    failure_strategy: skip
+    max_retries: 1
+
+delivery:
+  channel: internal
+  topic: storyhub.rental_settled
+  ordering: true
+  idempotent: true
+
+related_events: [item_status_changed]
+related_lifecycle: lifecycle_rental-contract

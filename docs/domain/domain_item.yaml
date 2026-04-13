@@ -1,0 +1,74 @@
+entity: Item
+description: Bản sao vật lý dùng cho thuê hoặc bán, là đơn vị giao dịch cốt lõi của StoryHub.
+bounded_context: inventory-rental-pos
+
+invariants:
+  - rule: Mỗi item chỉ thuộc đúng một volume.
+    enforced_by: schema_storyhub-core + service_inventory
+    violation_error: ITEM_VOLUME_REQUIRED
+    severity: block
+  - rule: Tại một thời điểm item chỉ có một trạng thái hoạt động duy nhất.
+    enforced_by: api_inventory-reserve-item_v1 + api_pos-create-order_v1 + api_rental-create-contract_v1
+    violation_error: ITEM_STATE_CONFLICT
+    severity: block
+  - rule: Không được tạo giao dịch thuê hoặc bán khi item không ở trạng thái available hoặc reserved hợp lệ.
+    enforced_by: bp_pos-create-order_v1 + bp_rental-create-contract_v1
+    violation_error: ITEM_NOT_AVAILABLE
+    severity: block
+  - rule: Reservation phải có hạn hết hiệu lực và được kiểm tra realtime khi query.
+    enforced_by: bp_inventory-reserve-item_v1
+    violation_error: RESERVATION_EXPIRED
+    severity: block
+
+aggregate:
+  root: Item
+  children: [ItemReservation, ItemConditionTimeline]
+  consistency: strong
+
+relationships:
+  - target: Volume
+    type: many-to-one
+    cascade: restrict
+    description: Nhiều item vật lý cùng thuộc một volume.
+  - target: RentalContract
+    type: many-to-many
+    cascade: restrict
+    description: Item có thể xuất hiện trong nhiều hợp đồng thuê theo thời gian.
+  - target: PosOrder
+    type: many-to-one
+    cascade: restrict
+    description: Item chỉ có thể được bán một lần trong hệ thống.
+
+business_rules:
+  - name: Reservation conversion rule
+    description: Reservation active có thể chuyển thành sold hoặc rented khi phát sinh giao dịch hợp lệ.
+    applies_to:
+      [
+        bp_inventory-reserve-item_v1,
+        bp_pos-create-order_v1,
+        bp_rental-create-contract_v1,
+      ]
+    configurable: true
+  - name: Condition downgrade on return
+    description: Mỗi lần trả item phải đánh giá condition_after và có thể làm giảm health_percent.
+    applies_to: [bp_rental-return-items_v1]
+    configurable: true
+
+value_objects:
+  - name: ItemStatus
+    type: string
+    constraints: enum [available, reserved, rented, sold, lost, maintenance]
+  - name: ConditionLevel
+    type: string
+    constraints: enum [good, minor_damage, major_damage, lost]
+
+emits_events:
+  - item_status_changed
+  - reservation_expired
+  - item_condition_updated
+
+related_apis:
+  - bp_inventory-reserve-item_v1
+  - bp_pos-create-order_v1
+  - bp_rental-create-contract_v1
+  - bp_rental-return-items_v1

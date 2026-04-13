@@ -1,0 +1,93 @@
+entity: Item
+description: Vòng đời item vật lý trong StoryHub từ khi sẵn sàng tới khi bán, thuê hoặc mất.
+initial_state: available
+
+states:
+  - name: available
+    description: Item sẵn sàng cho bán hoặc thuê.
+    is_terminal: false
+    ui_label: Sẵn sàng
+    ui_color: green
+  - name: reserved
+    description: Item được giữ chỗ có thời hạn.
+    is_terminal: false
+    ui_label: Đã giữ chỗ
+    ui_color: yellow
+  - name: rented
+    description: Item đang nằm trong hợp đồng thuê active.
+    is_terminal: false
+    ui_label: Đang thuê
+    ui_color: red
+  - name: sold
+    description: Item đã bán thành công.
+    is_terminal: true
+    ui_label: Đã bán
+    ui_color: gray
+  - name: lost
+    description: Item bị mất trong quá trình thuê.
+    is_terminal: true
+    ui_label: Thất lạc
+    ui_color: black
+  - name: maintenance
+    description: Item đang chờ xử lý hoặc sửa chữa.
+    is_terminal: false
+    ui_label: Bảo trì
+    ui_color: orange
+
+transitions:
+  - from: available
+    to: reserved
+    via: bp_inventory-reserve-item_v1
+    guard: customer hợp lệ và item chưa bị lock bởi giao dịch khác
+    side_effects: [ghi reservation, set expire_at]
+    emits_event: item_status_changed
+  - from: reserved
+    to: available
+    via: reservation_expire_job
+    guard: reservation_expire_at <= now
+    side_effects: [clear reservation metadata]
+    emits_event: reservation_expired
+  - from: reserved
+    to: rented
+    via: bp_rental-create-contract_v1
+    guard: reservation thuộc cùng customer hoặc policy cho phép override
+    side_effects: [bind item vào contract]
+    emits_event: item_status_changed
+  - from: available
+    to: rented
+    via: bp_rental-create-contract_v1
+    guard: item available và customer đủ điều kiện thuê
+    side_effects: [bind item vào contract]
+    emits_event: item_status_changed
+  - from: available
+    to: sold
+    via: bp_pos-create-order_v1
+    guard: item available và payment hợp lệ
+    side_effects: [ghi snapshot final_sell_price]
+    emits_event: item_status_changed
+  - from: rented
+    to: available
+    via: bp_rental-return-items_v1
+    guard: condition_after != lost
+    side_effects: [update condition, ghi timeline]
+    emits_event: item_condition_updated
+  - from: rented
+    to: lost
+    via: bp_rental-return-items_v1
+    guard: condition_after == lost
+    side_effects: [khóa item khỏi inventory vận hành]
+    emits_event: item_status_changed
+
+auto_transitions:
+  - from: reserved
+    to: available
+    trigger: timeout:reservation_expire_at
+    description: Reservation quá hạn tự chuyển về available.
+
+state_invariants:
+  reserved:
+    - rule: phải có reserved_by_customer_id và reservation_expire_at
+      enforced_by: service_inventory
+  rented:
+    - rule: phải tồn tại rental_item active liên kết item
+      enforced_by: service_rental

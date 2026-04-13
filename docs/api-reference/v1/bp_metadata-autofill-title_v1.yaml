@@ -1,0 +1,189 @@
+name: autofillTitleMetadata
+description: Tự động lấy metadata truyện theo tên hoặc ISBN, ưu tiên cache local và fallback khi nguồn ngoài lỗi.
+version: 0.1.0-blueprint
+deprecated: false
+status: blueprint
+tags: [metadata, integration, cache]
+category: metadata/autofill
+priority: medium
+doc_ref: bp_metadata-autofill-title_v1.md
+
+http:
+  method: POST
+  path: /api/v1/metadata/autofill
+  path_params: {}
+  query_params: {}
+  request_body:
+    type: object
+  content_type: application/json
+
+parameters:
+  type: object
+  required: [request_id]
+  properties:
+    query_text:
+      type: string
+      description: Tên truyện hoặc từ khóa tìm kiếm.
+    isbn:
+      type: string
+      description: ISBN nếu có.
+    force_refresh:
+      type: boolean
+      description: Bỏ qua cache và gọi lại nguồn ngoài.
+      default: false
+    request_id:
+      type: string
+      description: Idempotency key.
+
+returns:
+  type: object
+  properties:
+    source:
+      type: string
+      enum: [cache, external_api, fallback]
+    cache_hit:
+      type: boolean
+    metadata:
+      type: object
+      properties:
+        name:
+          type: string
+        author:
+          type: string
+        publisher:
+          type: string
+        genre:
+          type: string
+        description:
+          type: string
+        cover_url:
+          type: string
+        confidence:
+          type: number
+
+behavior:
+  deterministic: true
+  idempotent: true
+  retryable: true
+  side_effects: read-cache-write-cache
+  latency: medium
+  cacheable: true
+
+errors:
+  - code: INVALID_QUERY
+    type: ValidationError
+    http_status: 400
+    description: Thiếu cả query_text và isbn.
+  - code: INVALID_ISBN
+    type: ValidationError
+    http_status: 400
+    description: ISBN không hợp lệ.
+  - code: EXTERNAL_API_TIMEOUT
+    type: TimeoutError
+    http_status: 504
+    description: Nguồn metadata ngoài phản hồi quá chậm.
+  - code: METADATA_NOT_FOUND
+    type: NotFoundError
+    http_status: 404
+    description: Không tìm thấy metadata phù hợp từ mọi nguồn.
+
+auth:
+  required: true
+  type: Bearer Token
+  roles: [cashier, manager]
+  scopes: [metadata:read]
+
+dependencies:
+  requires:
+    [authenticate, metadataCacheLookup, fetchExternalMetadata, sanitizeMetadata]
+  provides: [title_metadata_context]
+  conflicts_with: []
+
+blueprint_tracking:
+  prompt_hash: sha256:39A7AF9101A919D4E08BDE915D0A5E02541CE5904112C4727797B817AAADB8AF
+  prompt_summary: Auto-fetch metadata theo tên hoặc ISBN, có cache local và fallback khi API chết.
+  assumptions:
+    - Hệ thống luôn ưu tiên cache local trước khi gọi nguồn ngoài.
+    - Nếu force_refresh=true vẫn phải cập nhật cache mới sau khi gọi thành công.
+    - confidence dùng để gợi ý nhân viên cần kiểm tra thủ công.
+  confidence: medium
+  generated_at: 2026-04-13T23:08:30+07:00
+  generator_version: agent-skill-doc-generator@1.0
+
+implementation_notes:
+  suggested_tech_stack: [FastAPI, local cache table, external metadata adapter]
+  open_questions:
+    - Nguồn metadata chính thức sẽ là API nào?
+    - TTL cache metadata nên đặt bao lâu?
+  acceptance_criteria:
+    - Query hợp lệ phải trả metadata hoặc lỗi rõ ràng.
+    - Hệ thống hoạt động ổn khi nguồn ngoài bị timeout.
+    - Trường source phản ánh đúng kênh dữ liệu thực tế.
+
+testing:
+  contract_tests:
+    - name: should_return_metadata_from_cache
+      type: happy_path
+      auto_generate: true
+      input:
+        query_text: Doraemon
+        request_id: req-meta-001
+      expected_status: 200
+    - name: should_fail_when_query_missing
+      type: error_case
+      auto_generate: true
+      input:
+        request_id: req-meta-002
+      expected_status: 400
+      expected_error:
+        code: INVALID_QUERY
+    - name: should_fail_without_auth
+      type: auth_check
+      auto_generate: true
+      expected_status: 401
+  mock:
+    enabled: true
+    output_path: mocks/bp_metadata-autofill-title_v1.mock.json
+    happy_path:
+      delay_ms: 160
+      response:
+        source: cache
+        cache_hit: true
+        metadata:
+          name: Doraemon
+          author: Fujiko F. Fujio
+          genre: Thieu nhi
+          confidence: 0.92
+    error_cases:
+      - error_code: INVALID_QUERY
+        delay_ms: 40
+      - error_code: EXTERNAL_API_TIMEOUT
+        delay_ms: 2000
+      - error_code: METADATA_NOT_FOUND
+        delay_ms: 70
+  frontend_scenarios:
+    - scenario: metadata_loading
+      description: Ô tìm metadata hiển thị loading khi truy vấn.
+      mock_config:
+        delay_ms: 1500
+      ui_state: loading
+      assertions:
+        - loading indicator visible
+        - submit disabled
+    - scenario: metadata_success
+      description: Tự điền metadata thành công từ cache hoặc API ngoài.
+      mock_config:
+        status: 200
+      ui_state: success
+      assertions:
+        - title fields autofilled
+        - source badge shown
+    - scenario: metadata_timeout_error
+      description: Timeout nguồn ngoài hiển thị retry banner.
+      mock_config:
+        status: 504
+        error_code: EXTERNAL_API_TIMEOUT
+      ui_state: error
+      assertions:
+        - retry button visible
+        - warning message shown

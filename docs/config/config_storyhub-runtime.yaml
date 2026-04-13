@@ -1,0 +1,102 @@
+config: storyhub-runtime
+description: Cấu hình runtime cho POS, rental, reservation, locking và xử lý scanner trong StoryHub.
+scope: global
+
+values:
+  reservation_timeout_minutes:
+    type: integer
+    default: 30
+    description: Thời gian giữ chỗ mặc định cho item reservation.
+    env_var: STORYHUB_RESERVATION_TIMEOUT_MINUTES
+    min: 1
+    max: 240
+    sensitive: false
+    hot_reload: true
+
+  scanner_buffer_timeout_ms:
+    type: integer
+    default: 50
+    description: Timeout buffer để phân biệt scanner và gõ tay.
+    env_var: STORYHUB_SCANNER_BUFFER_TIMEOUT_MS
+    min: 20
+    max: 200
+    sensitive: false
+    hot_reload: true
+
+  item_lock_timeout_ms:
+    type: integer
+    default: 2000
+    description: Thời gian chờ lock item trước khi trả conflict.
+    env_var: STORYHUB_ITEM_LOCK_TIMEOUT_MS
+    min: 100
+    max: 10000
+    sensitive: false
+    hot_reload: true
+
+  idempotency_window_hours:
+    type: integer
+    default: 24
+    description: Khoảng thời gian lưu request_id để chống xử lý trùng.
+    env_var: STORYHUB_IDEMPOTENCY_WINDOW_HOURS
+    min: 1
+    max: 168
+    sensitive: false
+    hot_reload: false
+
+  overdue_fee_per_day:
+    type: number
+    default: 5000
+    description: Phí quá hạn mặc định cho mỗi ngày quá hạn.
+    env_var: STORYHUB_OVERDUE_FEE_PER_DAY
+    min: 0
+    max: 100000
+    sensitive: false
+    hot_reload: true
+
+  damage_fee_minor_percent:
+    type: number
+    default: 20
+    description: Tỷ lệ phí cho hỏng nhẹ theo giá trị cọc item.
+    env_var: STORYHUB_DAMAGE_FEE_MINOR_PERCENT
+    min: 0
+    max: 100
+    sensitive: false
+    hot_reload: true
+
+  damage_fee_major_percent:
+    type: number
+    default: 50
+    description: Tỷ lệ phí cho hỏng nặng theo giá trị cọc item.
+    env_var: STORYHUB_DAMAGE_FEE_MAJOR_PERCENT
+    min: 0
+    max: 100
+    sensitive: false
+    hot_reload: true
+
+referenced_by:
+  - bp_inventory-reserve-item_v1
+  - bp_pos-create-order_v1
+  - bp_rental-return-items_v1
+  - ui_pos-main-kiosk
+  - ui_rental-return-inspection
+  - lifecycle_item
+  - lifecycle_rental-contract
+
+environment_overrides:
+  development:
+    reservation_timeout_minutes: 10
+    item_lock_timeout_ms: 5000
+    overdue_fee_per_day: 1000
+  staging:
+    reservation_timeout_minutes: 30
+    item_lock_timeout_ms: 2500
+  production:
+    reservation_timeout_minutes: 30
+    item_lock_timeout_ms: 2000
+    overdue_fee_per_day: 5000
+
+tenant_overridable:
+  - reservation_timeout_minutes
+  - overdue_fee_per_day
+  - damage_fee_minor_percent
+  - damage_fee_major_percent

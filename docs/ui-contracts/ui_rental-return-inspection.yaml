@@ -1,0 +1,108 @@
+component: RentalReturnInspection
+description: Màn hình trả truyện theo inspection mode, hỗ trợ scan nhanh, chọn tình trạng bằng phím số và xem settlement realtime.
+page: /rental/return
+platform: kiosk
+
+states:
+  - name: loading
+    description: Đang tải contract và dữ liệu trả.
+    ui_behavior: Skeleton danh sách item và panel phí.
+  - name: success
+    description: Contract hợp lệ, sẵn sàng nhận trả.
+    ui_behavior: Hiển thị item list, trạng thái kiểm định mặc định tốt.
+  - name: error
+    description: Lỗi xác thực contract hoặc lỗi settlement.
+    ui_behavior: Banner lỗi đỏ + retry.
+  - name: empty
+    description: Chưa scan item trả.
+    ui_behavior: Hướng dẫn scan barcode item để bắt đầu.
+  - name: settling
+    description: Đang gửi settle request.
+    ui_behavior: Overlay loading, khóa thao tác sửa condition.
+
+data_binding:
+  source: bp_rental-return-items_v1
+  method: POST
+  mapping:
+    contract_id: request.contract_id
+    return_lines: request.return_lines
+    fee_total: response.total_fee
+    deducted_from_deposit: response.deducted_from_deposit
+    refund_to_customer: response.refund_to_customer
+    remaining_debt: response.remaining_debt
+  refresh_strategy: manual
+  cache_strategy: none
+
+interactions:
+  - action: scan_return_item
+    trigger: global keyboard listener từ barcode scanner
+    api_call: local_contract_item_match
+    optimistic_update: true
+    loading_indicator: inline
+    success_feedback: toast+beep
+    confirm_required: false
+    confirm_message: ""
+  - action: set_condition_quick
+    trigger: phím 1 hoặc 2 hoặc 3 hoặc 4
+    api_call: local_state_only
+    optimistic_update: true
+    loading_indicator: none
+    success_feedback: inline_message
+    confirm_required: false
+    confirm_message: ""
+  - action: submit_settlement
+    trigger: Enter hoặc nút Xác nhận trả
+    api_call: bp_rental-return-items_v1
+    optimistic_update: false
+    loading_indicator: overlay
+    success_feedback: toast
+    confirm_required: false
+    confirm_message: ""
+
+error_handling:
+  CONTRACT_NOT_FOUND:
+    ui: fullpage_error
+    message: Không tìm thấy phiếu thuê cần trả.
+    action: back_to_search
+  ITEM_NOT_IN_CONTRACT:
+    ui: toast_error
+    message: Mã truyện này không thuộc phiếu hiện tại.
+    action: reject_scanned_item
+  RETURN_DUPLICATED:
+    ui: inline_warning
+    message: Item này đã được trả trước đó.
+    action: mark_duplicate
+  INVALID_CONDITION_TRANSITION:
+    ui: inline_validation
+    message: Tình trạng kiểm định không hợp lệ.
+    action: force_reselect_condition
+
+auth_ui:
+  hide_if_no_permission: [button_override_fee]
+  disable_if_no_permission: [input_manual_fee_adjustment]
+  route_guard:
+    required_roles: [cashier, manager]
+    redirect_to: /403
+    show_message: Bạn không có quyền xử lý trả truyện.
+
+performance:
+  skeleton_loading: true
+  lazy_load: false
+  virtualize_list: true
+  prefetch: [bp_rental-create-contract_v1]
+  debounce_ms: 0
+
+responsive:
+  breakpoints:
+    mobile: không hỗ trợ
+    tablet: item list trên, settlement dưới
+    desktop: item list trái, settlement phải
+
+accessibility:
+  aria_label: Màn hình trả truyện kiểm định
+  keyboard_nav: true
+  focus_trap: false
+
+related_api: bp_rental-return-items_v1
+related_lifecycle: lifecycle_rental-contract
+related_domain: domain_rental-contract

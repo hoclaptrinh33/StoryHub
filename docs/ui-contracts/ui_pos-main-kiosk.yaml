@@ -1,0 +1,111 @@
+component: PosMainKiosk
+description: Màn hình bán hàng chính tối ưu cho quầy, thao tác nhanh bằng bàn phím và barcode scanner.
+page: /pos/main
+platform: kiosk
+
+states:
+  - name: loading
+    description: Đang tải dữ liệu giỏ hàng và cấu hình POS.
+    ui_behavior: Hiển thị skeleton cho 3 cột, khóa nút thanh toán.
+  - name: success
+    description: Màn hình sẵn sàng thao tác.
+    ui_behavior: Hiển thị layout 3 vùng scan hoặc tìm, giỏ hàng, thanh toán.
+  - name: error
+    description: Lỗi API hoặc lỗi scanner.
+    ui_behavior: Banner lỗi + nút thử lại + âm báo lỗi.
+  - name: empty
+    description: Giỏ hàng chưa có item.
+    ui_behavior: Hiển thị empty state với hướng dẫn quét mã.
+  - name: scanning
+    description: Đang nhận chuỗi barcode từ global listener.
+    ui_behavior: Hiển thị indicator scanning và tạm khóa hotkey xung đột.
+  - name: paying
+    description: Đang xử lý thanh toán tạo đơn.
+    ui_behavior: Disable inputs, hiển thị progress ngắn.
+
+data_binding:
+  source: bp_pos-create-order_v1
+  method: POST
+  mapping:
+    cart_items: request.item_ids
+    discount_type: request.discount_type
+    discount_value: request.discount_value
+    payment_breakdown: request.split_payments
+    order_id: response.order_id
+    grand_total: response.grand_total
+  refresh_strategy: manual
+  cache_strategy: none
+
+interactions:
+  - action: scan_item
+    trigger: global keyboard listener nhận chuỗi barcode kết thúc bằng Enter
+    api_call: item_lookup_local_cache
+    optimistic_update: true
+    loading_indicator: inline
+    success_feedback: toast+beep
+    confirm_required: false
+    confirm_message: ""
+  - action: create_order
+    trigger: F1 hoặc nút Thanh toán lớn
+    api_call: bp_pos-create-order_v1
+    optimistic_update: false
+    loading_indicator: overlay
+    success_feedback: redirect
+    confirm_required: false
+    confirm_message: ""
+  - action: clear_cart
+    trigger: ESC
+    api_call: local_state_only
+    optimistic_update: true
+    loading_indicator: none
+    success_feedback: inline_message
+    confirm_required: false
+    confirm_message: ""
+
+error_handling:
+  ITEM_NOT_AVAILABLE:
+    ui: toast_error
+    message: Truyện này hiện không sẵn sàng để bán.
+    action: highlight_conflicted_item
+  SPLIT_PAYMENT_MISMATCH:
+    ui: inline_validation
+    message: Tổng tiền thanh toán chưa khớp tổng đơn.
+    action: focus_payment_panel
+  ORDER_LOCK_CONFLICT:
+    ui: retry_banner
+    message: Có xung đột dữ liệu, vui lòng thử lại ngay.
+    action: retry_create_order
+  NETWORK_ERROR:
+    ui: retry_banner
+    message: Mất kết nối backend cục bộ.
+    action: retry_with_backoff
+
+auth_ui:
+  hide_if_no_permission: [button_refund_order, input_price_override]
+  disable_if_no_permission: [button_apply_manual_discount]
+  route_guard:
+    required_roles: [cashier, manager]
+    redirect_to: /403
+    show_message: Bạn không có quyền truy cập màn hình bán hàng.
+
+performance:
+  skeleton_loading: true
+  lazy_load: false
+  virtualize_list: true
+  prefetch: [bp_crm-upsert-customer_v1]
+  debounce_ms: 80
+
+responsive:
+  breakpoints:
+    mobile: không hỗ trợ vận hành chính thức
+    tablet: bố cục 2 cột, vùng thanh toán thu gọn
+    desktop: bố cục 3 cột chuẩn POS
+
+accessibility:
+  aria_label: Màn hình bán hàng StoryHub
+  keyboard_nav: true
+  focus_trap: false
+
+related_api: bp_pos-create-order_v1
+related_lifecycle: lifecycle_item
+related_domain: domain_item

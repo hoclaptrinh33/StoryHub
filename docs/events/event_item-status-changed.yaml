@@ -1,0 +1,60 @@
+event: item_status_changed
+description: Phát ra khi item vật lý thay đổi trạng thái trong các luồng reserve, sell, rent, return.
+domain: inventory-rental-pos
+severity: info
+
+triggered_by: bp_inventory-reserve-item_v1,bp_pos-create-order_v1,bp_rental-create-contract_v1,bp_rental-return-items_v1
+trigger_condition: API mutation thành công và trạng thái item thực sự thay đổi.
+
+payload:
+  type: object
+  required: [item_id, old_status, new_status, changed_by, changed_at]
+  properties:
+    item_id:
+      type: string
+      description: Mã item vật lý.
+    old_status:
+      type: string
+      description: Trạng thái trước khi đổi.
+    new_status:
+      type: string
+      description: Trạng thái sau khi đổi.
+    changed_by:
+      type: string
+      description: User ID thực hiện thao tác.
+    changed_at:
+      type: string
+      format: date-time
+      description: Thời điểm thay đổi.
+    source_api:
+      type: string
+      description: API tạo ra thay đổi trạng thái.
+
+consumers:
+  - name: write_audit_log
+    action: Ghi before/after vào audit_log.
+    async: false
+    required: true
+    failure_strategy: retry
+    max_retries: 3
+  - name: refresh_pos_and_rental_ui
+    action: Cập nhật trạng thái item trên kiosk UI.
+    async: true
+    required: false
+    failure_strategy: skip
+    max_retries: 1
+  - name: update_inventory_analytics
+    action: Cập nhật chỉ số tồn kho theo trạng thái.
+    async: true
+    required: false
+    failure_strategy: retry
+    max_retries: 3
+
+delivery:
+  channel: internal
+  topic: storyhub.item_status_changed
+  ordering: true
+  idempotent: true
+
+related_events: [rental_settled]
+related_lifecycle: lifecycle_item

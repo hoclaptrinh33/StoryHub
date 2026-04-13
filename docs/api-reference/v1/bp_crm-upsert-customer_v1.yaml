@@ -1,0 +1,196 @@
+name: upsertCustomerProfile
+description: Tạo mới hoặc cập nhật hồ sơ khách hàng theo số điện thoại, có kiểm soát số dư cọc và công nợ.
+version: 0.1.0-blueprint
+deprecated: false
+status: blueprint
+tags: [crm, customer, profile]
+category: crm/customer
+priority: high
+doc_ref: bp_crm-upsert-customer_v1.md
+
+http:
+  method: PUT
+  path: /api/v1/customers/{phone}
+  path_params:
+    phone:
+      type: string
+  query_params: {}
+  request_body:
+    type: object
+  content_type: application/json
+
+parameters:
+  type: object
+  required: [phone, name, membership_level, request_id]
+  properties:
+    phone:
+      type: string
+      description: Số điện thoại định danh khách hàng.
+    name:
+      type: string
+      description: Tên hiển thị khách hàng.
+    address:
+      type: string
+      description: Địa chỉ liên hệ.
+    membership_level:
+      type: string
+      enum: [standard, silver, gold, vip]
+    deposit_delta:
+      type: number
+      description: Giá trị cộng hoặc trừ vào số dư cọc.
+    debt_delta:
+      type: number
+      description: Giá trị cộng hoặc trừ vào công nợ.
+    blacklist_flag:
+      type: boolean
+      description: Đánh dấu khách hàng vào blacklist.
+    request_id:
+      type: string
+      description: Idempotency key cho thao tác cập nhật.
+
+returns:
+  type: object
+  properties:
+    customer_id:
+      type: string
+    phone:
+      type: string
+    name:
+      type: string
+    membership_level:
+      type: string
+    deposit_balance:
+      type: number
+    debt:
+      type: number
+    blacklist_flag:
+      type: boolean
+    updated_at:
+      type: string
+      format: date-time
+
+behavior:
+  deterministic: true
+  idempotent: true
+  retryable: true
+  side_effects: upsert-customer
+  latency: low
+  cacheable: false
+
+errors:
+  - code: INVALID_PHONE
+    type: ValidationError
+    http_status: 400
+    description: Số điện thoại không đúng định dạng.
+  - code: NEGATIVE_BALANCE_NOT_ALLOWED
+    type: ValidationError
+    http_status: 400
+    description: Số dư cọc hoặc công nợ sau cập nhật không hợp lệ.
+  - code: BLACKLISTED_CUSTOMER_MUTATION_DENIED
+    type: PermissionError
+    http_status: 403
+    description: Không cho phép cập nhật trường nhạy cảm cho khách blacklist.
+
+auth:
+  required: true
+  type: Bearer Token
+  roles: [cashier, manager]
+  scopes: [crm:write]
+
+dependencies:
+  requires: [authenticate, validateCustomerPayload, createAuditLog]
+  provides: [customer_context]
+  conflicts_with: []
+
+blueprint_tracking:
+  prompt_hash: sha256:39A7AF9101A919D4E08BDE915D0A5E02541CE5904112C4727797B817AAADB8AF
+  prompt_summary: Quản lý hồ sơ khách hàng gồm hạng thành viên, cọc, nợ và trạng thái blacklist.
+  assumptions:
+    - Số điện thoại là khóa định danh nghiệp vụ ở quầy.
+    - Chỉ manager mới được chuyển blacklist từ true sang false.
+    - Mọi thay đổi số dư và công nợ đều bắt buộc audit.
+  confidence: high
+  generated_at: 2026-04-13T23:08:30+07:00
+  generator_version: agent-skill-doc-generator@1.0
+
+implementation_notes:
+  suggested_tech_stack: [FastAPI, SQLAlchemy, Pydantic]
+  open_questions:
+    - Có cần chuẩn hóa số điện thoại theo E.164 không?
+    - Có giới hạn tối đa công nợ theo membership level không?
+  acceptance_criteria:
+    - Upsert theo phone phải hoạt động ổn định trong mọi ca dùng.
+    - Không cho phép dữ liệu cọc và công nợ sai quy tắc.
+    - Bản ghi audit phải có before/after với các trường tài chính.
+
+testing:
+  contract_tests:
+    - name: should_upsert_customer_successfully
+      type: happy_path
+      auto_generate: true
+      input:
+        phone: "0901234567"
+        name: "Nguyen Minh Anh"
+        membership_level: gold
+        request_id: req-crm-001
+      expected_status: 200
+    - name: should_fail_with_invalid_phone
+      type: error_case
+      auto_generate: true
+      input:
+        phone: "abc"
+        name: "Nguyen Minh Anh"
+        membership_level: standard
+        request_id: req-crm-002
+      expected_status: 400
+      expected_error:
+        code: INVALID_PHONE
+    - name: should_fail_without_auth
+      type: auth_check
+      auto_generate: true
+      expected_status: 401
+  mock:
+    enabled: true
+    output_path: mocks/bp_crm-upsert-customer_v1.mock.json
+    happy_path:
+      delay_ms: 120
+      response:
+        customer_id: CUS-0001
+        phone: "0901234567"
+        name: "Nguyen Minh Anh"
+        membership_level: gold
+        deposit_balance: 500000
+        debt: 0
+    error_cases:
+      - error_code: INVALID_PHONE
+        delay_ms: 50
+      - error_code: NEGATIVE_BALANCE_NOT_ALLOWED
+        delay_ms: 80
+      - error_code: BLACKLISTED_CUSTOMER_MUTATION_DENIED
+        delay_ms: 90
+  frontend_scenarios:
+    - scenario: crm_upsert_loading
+      description: Nút lưu hiển thị loading khi gửi request.
+      mock_config:
+        delay_ms: 2000
+      ui_state: loading
+      assertions:
+        - save button disabled
+        - inline spinner visible
+    - scenario: crm_upsert_success
+      description: Lưu thành công hiển thị cập nhật số dư mới.
+      mock_config:
+        status: 200
+      ui_state: success
+      assertions:
+        - success toast visible
+        - updated balance shown
+    - scenario: crm_invalid_phone_error
+      description: Số điện thoại không hợp lệ hiển thị lỗi tại field.
+      mock_config:
+        status: 400
+        error_code: INVALID_PHONE
+      ui_state: error
+      assertions:
+        - phone field shows validation message
+        - save remains disabled

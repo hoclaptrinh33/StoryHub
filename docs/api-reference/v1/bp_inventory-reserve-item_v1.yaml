@@ -1,0 +1,263 @@
+name: reserveInventoryItem
+description: Giữ chỗ một item cho khách trong thời gian giới hạn và tự động hết hạn theo thời gian thực.
+version: 0.1.0-blueprint
+deprecated: false
+status: blueprint
+tags: [inventory, reservation, item-locking]
+category: inventory/reservation
+priority: high
+doc_ref: bp_inventory-reserve-item_v1.md
+
+http:
+  method: POST
+  path: /api/v1/inventory/reservations
+  path_params: {}
+  query_params: {}
+  request_body:
+    type: object
+  content_type: application/json
+
+parameters:
+  type: object
+  required: [item_id, customer_id, reservation_minutes, request_id]
+  properties:
+    item_id:
+      type: string
+      description: Mã item vật lý (SKU hoặc barcode).
+    customer_id:
+      type: string
+      description: Định danh khách hàng giữ chỗ.
+    reservation_minutes:
+      type: integer
+      description: Thời lượng giữ chỗ tính theo phút.
+      minimum: 1
+      maximum: 240
+    request_id:
+      type: string
+      description: Idempotency key để chống tạo reservation trùng.
+
+returns:
+  type: object
+  properties:
+    reservation_id:
+      type: string
+    item_id:
+      type: string
+    customer_id:
+      type: string
+    status:
+      type: string
+      enum: [active, expired, converted, cancelled]
+    reserved_at:
+      type: string
+      format: date-time
+    reservation_expire_at:
+      type: string
+      format: date-time
+
+behavior:
+  deterministic: true
+  idempotent: true
+  retryable: true
+  side_effects: write-reservation
+  latency: low
+  cacheable: false
+  preconditions:
+    - condition: item.status == 'available' OR reservation đã hết hạn realtime
+      check_via: inventory_item_lookup
+      error_if_false: ITEM_NOT_AVAILABLE
+    - condition: customer.blacklist_flag == false
+      check_via: bp_crm-upsert-customer_v1
+      error_if_false: CUSTOMER_BLACKLISTED
+  postconditions:
+    - effect: item.status = 'reserved'
+      verifiable: true
+      verify_via: inventory_item_lookup
+    - effect: reservation_expire_at được set theo policy
+      verifiable: true
+      verify_via: reservation_query
+  side_effect_scope:
+    reads: [item, customer, runtime_config]
+    writes: [reservation, item]
+    external: []
+  failure_strategy:
+    ITEM_NOT_AVAILABLE:
+      action: abort
+      max_retries: 0
+      backoff: fixed
+      backoff_base_ms: 0
+      alert: false
+    RESERVATION_LOCK_TIMEOUT:
+      action: retry
+      max_retries: 2
+      backoff: exponential
+      backoff_base_ms: 200
+      fallback: none
+      alert: false
+  frontend:
+    loading_strategy: inline
+    error_surface: toast
+    empty_state: text_only
+    cache_strategy: none
+    retry_ui: true
+    optimistic_updates: false
+
+errors:
+  - code: ITEM_NOT_AVAILABLE
+    type: ConflictError
+    http_status: 409
+    description: Item không ở trạng thái available nên không thể giữ chỗ.
+  - code: ITEM_ALREADY_RESERVED
+    type: ConflictError
+    http_status: 409
+    description: Item đang có reservation còn hiệu lực.
+  - code: INVALID_RESERVATION_WINDOW
+    type: ValidationError
+    http_status: 400
+    description: reservation_minutes nằm ngoài giới hạn cho phép.
+  - code: RESERVATION_LOCK_TIMEOUT
+    type: LockTimeoutError
+    http_status: 423
+    description: Không lấy được lock item trong thời gian cho phép.
+
+auth:
+  required: true
+  type: Bearer Token
+  roles: [cashier, manager]
+  scopes: [inventory:reserve]
+  permissions:
+    - role: cashier
+      access: conditional
+      condition: user.branch_id == item.branch_id
+      fields_allowed: [item_id, customer_id, reservation_minutes, request_id]
+      fields_denied: []
+    - role: manager
+      access: full
+      condition: ""
+      fields_allowed: []
+      fields_denied: []
+  frontend_auth:
+    hide_actions: [button_force_override_reservation]
+    disable_actions: []
+    route_guard:
+      min_role: cashier
+      redirect_to: /403
+      show_message: Bạn không có quyền giữ chỗ item.
+  data_filtering:
+    auto_filter: true
+    filter_field: branch_id
+
+dependencies:
+  requires:
+    - tool: authenticate
+      order: 1
+      mandatory: true
+      provides_data: auth_context
+    - tool: validateReservationWindow
+      order: 2
+      mandatory: true
+      provides_data: reservation_policy
+    - tool: lockItemForReservation
+      order: 2
+      mandatory: true
+      provides_data: item_lock
+  conditional:
+    - tool: notifyReservationExpiryQueue
+      condition: reservation_minutes >= 15
+  fallback:
+    - tool: inventoryReservationFromReplica
+      replaces: inventoryPrimaryRead
+      when: primary_db_unavailable
+      degraded: true
+  provides: [reservation_context]
+  conflicts_with: [sellItem, createRentalContract]
+  conflict_reason: race condition trên cùng item
+
+blueprint_tracking:
+  prompt_hash: sha256:39A7AF9101A919D4E08BDE915D0A5E02541CE5904112C4727797B817AAADB8AF
+  prompt_summary: Giữ chỗ item theo khách hàng, có expiry realtime và chuyển trạng thái khi bán hoặc thuê.
+  assumptions:
+    - Mỗi item chỉ có tối đa một reservation active cùng lúc.
+    - Reservation mặc định hết hạn sau 30 phút nếu không chỉ định rule riêng.
+    - Khi chuyển sang thuê hoặc bán, reservation đổi trạng thái thành converted.
+  confidence: high
+  generated_at: 2026-04-13T23:08:30+07:00
+  generator_version: agent-skill-doc-generator@1.0
+
+implementation_notes:
+  suggested_tech_stack: [FastAPI, SQLAlchemy, SQLite]
+  open_questions:
+    - Có cho phép chồng reservation theo hàng chờ không?
+    - Rule thời gian hết hạn có theo membership level không?
+  acceptance_criteria:
+    - Tạo reservation thành công phải trả về expire_at rõ ràng.
+    - Query item phải tự kiểm tra reservation hết hạn theo thời gian thực.
+    - request_id trùng phải trả cùng kết quả, không tạo bản ghi mới.
+
+testing:
+  contract_tests:
+    - name: should_create_reservation_successfully
+      type: happy_path
+      auto_generate: true
+      input:
+        item_id: ITM-0001
+        customer_id: CUS-0001
+        reservation_minutes: 30
+        request_id: req-resv-001
+      expected_status: 200
+    - name: should_reject_when_item_not_available
+      type: error_case
+      auto_generate: true
+      input:
+        item_id: ITM-0002
+        customer_id: CUS-0001
+        reservation_minutes: 30
+        request_id: req-resv-002
+      expected_status: 409
+      expected_error:
+        code: ITEM_NOT_AVAILABLE
+    - name: should_reject_without_auth
+      type: auth_check
+      auto_generate: true
+      expected_status: 401
+  mock:
+    enabled: true
+    output_path: mocks/bp_inventory-reserve-item_v1.mock.json
+    happy_path:
+      delay_ms: 120
+      response:
+        reservation_id: RESV-0001
+        item_id: ITM-0001
+        customer_id: CUS-0001
+        status: active
+    error_cases:
+      - error_code: ITEM_NOT_AVAILABLE
+        delay_ms: 80
+      - error_code: ITEM_ALREADY_RESERVED
+        delay_ms: 80
+  frontend_scenarios:
+    - scenario: loading_reservation
+      description: Nút giữ chỗ hiển thị loading khi gửi request.
+      mock_config:
+        delay_ms: 2000
+      ui_state: loading
+      assertions:
+        - reservation button disabled
+        - inline spinner visible
+    - scenario: success_reservation
+      description: Item chuyển trạng thái reserved sau khi thành công.
+      mock_config:
+        status: 200
+      ui_state: success
+      assertions:
+        - item badge shows reserved
+        - toast success visible
+    - scenario: conflict_reservation
+      description: Item không khả dụng phải báo lỗi ngay.
+      mock_config:
+        status: 409
+        error_code: ITEM_NOT_AVAILABLE
+      ui_state: error
+      assertions:
+        - error toast visible
+        - item remains unavailable

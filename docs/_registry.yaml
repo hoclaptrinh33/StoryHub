@@ -1,0 +1,231 @@
+project:
+  name: StoryHub
+  tier: standard
+  mode: blueprint
+  total_tools: 10
+  total_blueprints: 10
+  total_stale: 0
+  last_full_scan: 2026-04-14T00:38:23+07:00
+  doc_types_generated:
+    - api
+    - domain
+    - dataflow
+    - lifecycle
+    - event
+    - ui
+    - flow
+    - config
+    - realtime
+    - migration
+    - how-to
+    - standards
+    - changelog
+
+tools:
+  - name: reserveInventoryItem
+    path: api-reference/v1/bp_inventory-reserve-item_v1.yaml
+    version: 0.1.0-blueprint
+    deprecated: false
+    status: blueprint
+    tags: [inventory, reservation, item-locking]
+    category: inventory/reservation
+    method: POST
+    endpoint: /api/v1/inventory/reservations
+    stale: false
+
+  - name: upsertCustomerProfile
+    path: api-reference/v1/bp_crm-upsert-customer_v1.yaml
+    version: 0.1.0-blueprint
+    deprecated: false
+    status: blueprint
+    tags: [crm, customer, profile]
+    category: crm/customer
+    method: PUT
+    endpoint: /api/v1/customers/{phone}
+    stale: false
+
+  - name: createPosOrder
+    path: api-reference/v1/bp_pos-create-order_v1.yaml
+    version: 0.1.0-blueprint
+    deprecated: false
+    status: blueprint
+    tags: [pos, sales, pricing-snapshot]
+    category: pos/order
+    method: POST
+    endpoint: /api/v1/pos/orders
+    stale: false
+
+  - name: refundPosOrder
+    path: api-reference/v1/bp_pos-refund-order_v1.yaml
+    version: 0.1.0-blueprint
+    deprecated: false
+    status: blueprint
+    tags: [pos, refund, finance]
+    category: pos/refund
+    method: POST
+    endpoint: /api/v1/pos/orders/{order_id}/refund
+    stale: false
+
+  - name: createRentalContract
+    path: api-reference/v1/bp_rental-create-contract_v1.yaml
+    version: 0.1.0-blueprint
+    deprecated: false
+    status: blueprint
+    tags: [rental, contract, deposit]
+    category: rental/contract
+    method: POST
+    endpoint: /api/v1/rentals/contracts
+    stale: false
+
+  - name: returnRentalItems
+    path: api-reference/v1/bp_rental-return-items_v1.yaml
+    version: 0.1.0-blueprint
+    deprecated: false
+    status: blueprint
+    tags: [rental, return, settlement]
+    category: rental/settlement
+    method: POST
+    endpoint: /api/v1/rentals/contracts/{contract_id}/return
+    stale: false
+
+  - name: extendRentalContract
+    path: api-reference/v1/bp_rental-extend-contract_v1.yaml
+    version: 0.1.0-blueprint
+    deprecated: false
+    status: blueprint
+    tags: [rental, extension, due-date]
+    category: rental/extension
+    method: POST
+    endpoint: /api/v1/rentals/contracts/{contract_id}/extend
+    stale: false
+
+  - name: autofillTitleMetadata
+    path: api-reference/v1/bp_metadata-autofill-title_v1.yaml
+    version: 0.1.0-blueprint
+    deprecated: false
+    status: blueprint
+    tags: [metadata, integration, cache]
+    category: metadata/autofill
+    method: POST
+    endpoint: /api/v1/metadata/autofill
+    stale: false
+
+  - name: getRevenueSummaryReport
+    path: api-reference/v1/bp_report-revenue-summary_v1.yaml
+    version: 0.1.0-blueprint
+    deprecated: false
+    status: blueprint
+    tags: [report, revenue, analytics]
+    category: report/revenue
+    method: POST
+    endpoint: /api/v1/reports/revenue-summary
+    stale: false
+
+  - name: createSystemBackup
+    path: api-reference/v1/bp_system-create-backup_v1.yaml
+    version: 0.1.0-blueprint
+    deprecated: false
+    status: blueprint
+    tags: [system, backup, resilience]
+    category: system/backup
+    method: POST
+    endpoint: /api/v1/system/backups
+    stale: false
+
+schemas:
+  - name: storyhub-core
+    path: database/schema_storyhub-core.md
+
+logic:
+  - name: rental-lifecycle
+    path: business-logic/logic_rental-lifecycle.md
+  - name: barcode-keyboard-buffer
+    path: business-logic/logic_barcode-keyboard-buffer.md
+  - name: security-audit-and-locking
+    path: business-logic/logic_security-audit-and-locking.md
+
+domains:
+  - name: item
+    path: domain/domain_item.yaml
+    invariants_count: 4
+  - name: rental-contract
+    path: domain/domain_rental-contract.yaml
+    invariants_count: 4
+
+dataflows:
+  - name: rental-return-settlement
+    path: domain/dataflow_rental-return-settlement.md
+
+lifecycles:
+  - name: item
+    path: lifecycle/lifecycle_item.yaml
+    states_count: 6
+    transitions_count: 7
+  - name: rental-contract
+    path: lifecycle/lifecycle_rental-contract.yaml
+    states_count: 5
+    transitions_count: 7
+
+events:
+  - name: item_status_changed
+    path: events/event_item-status-changed.yaml
+    consumers_count: 3
+  - name: rental_settled
+    path: events/event_rental-settled.yaml
+    consumers_count: 3
+
+ui_contracts:
+  - name: PosMainKiosk
+    path: ui-contracts/ui_pos-main-kiosk.yaml
+    states_count: 6
+    related_api: bp_pos-create-order_v1
+  - name: RentalReturnInspection
+    path: ui-contracts/ui_rental-return-inspection.yaml
+    states_count: 5
+    related_api: bp_rental-return-items_v1
+
+user_flows:
+  - name: pos-checkout
+    path: user-flows/flow_pos-checkout.md
+    steps_count: 5
+  - name: rental-return
+    path: user-flows/flow_rental-return.md
+    steps_count: 5
+
+configs:
+  - name: storyhub-runtime
+    path: config/config_storyhub-runtime.yaml
+    values_count: 7
+
+realtime:
+  - name: item-live-updates
+    path: realtime/realtime_item-live-updates.yaml
+    events_count: 2
+    protocol: websocket
+
+migrations:
+  - name: blueprint-to-implementation-v1
+    path: migrations/migration_blueprint-to-implementation-v1.md
+    status: planned
+
+how_to_guides:
+  - name: project-implementation-steps
+    path: how-to/howto_project-implementation-steps.md
+    phases_count: 9
+    status: active
+  - name: development-environment-setup
+    path: how-to/howto_development-environment-setup.md
+    status: active
+
+standards:
+  - name: terminology-glossary
+    path: standards/standard_terminology-glossary.md
+    status: active
+  - name: coding-and-collaboration
+    path: standards/standard_coding-and-collaboration.md
+    status: active
+
+project_docs:
+  - name: changelog
+    path: ../CHANGELOG.md
+    status: active

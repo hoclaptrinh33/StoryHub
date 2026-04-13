@@ -1,0 +1,88 @@
+entity: RentalContract
+description: Vòng đời hợp đồng thuê từ lúc active tới khi trả đủ hoặc hủy.
+initial_state: active
+
+states:
+  - name: active
+    description: Hợp đồng đang hiệu lực và còn item chưa trả.
+    is_terminal: false
+    ui_label: Đang hiệu lực
+    ui_color: green
+  - name: partial_returned
+    description: Đã trả một phần item nhưng chưa tất toán toàn bộ.
+    is_terminal: false
+    ui_label: Trả một phần
+    ui_color: yellow
+  - name: overdue
+    description: Quá hạn do due_date < hiện tại và còn item chưa trả.
+    is_terminal: false
+    ui_label: Quá hạn
+    ui_color: red
+  - name: closed
+    description: Đã trả đủ hoặc settled hoàn tất.
+    is_terminal: true
+    ui_label: Đã đóng
+    ui_color: gray
+  - name: cancelled
+    description: Hủy hợp đồng theo policy.
+    is_terminal: true
+    ui_label: Đã hủy
+    ui_color: black
+
+transitions:
+  - from: active
+    to: partial_returned
+    via: bp_rental-return-items_v1
+    guard: còn ít nhất 1 rental_item trạng thái rented
+    side_effects: [create partial settlement]
+    emits_event: rental_item_returned
+  - from: active
+    to: closed
+    via: bp_rental-return-items_v1
+    guard: tất cả rental_item đã returned hoặc lost và settlement hoàn tất
+    side_effects: [finalize debt/refund]
+    emits_event: rental_settled
+  - from: partial_returned
+    to: closed
+    via: bp_rental-return-items_v1
+    guard: trả đủ item còn lại
+    side_effects: [finalize debt/refund]
+    emits_event: rental_settled
+  - from: active
+    to: overdue
+    via: overdue_monitor_job
+    guard: now > due_date và còn item chưa trả
+    side_effects: [flag overdue]
+    emits_event: rental_overdue_marked
+  - from: overdue
+    to: partial_returned
+    via: bp_rental-return-items_v1
+    guard: trả được một phần item
+    side_effects: [recalculate overdue fee]
+    emits_event: rental_item_returned
+  - from: overdue
+    to: closed
+    via: bp_rental-return-items_v1
+    guard: trả đủ item và settle xong
+    side_effects: [recalculate overdue fee, close contract]
+    emits_event: rental_settled
+  - from: active
+    to: active
+    via: bp_rental-extend-contract_v1
+    guard: new_due_date > current due_date
+    side_effects: [update due_date, maybe collect additional_deposit]
+    emits_event: rental_extended
+
+auto_transitions:
+  - from: active
+    to: overdue
+    trigger: cron:every-hour
+    description: Job định kỳ đánh dấu overdue.
+
+state_invariants:
+  active:
+    - rule: due_date phải tồn tại và lớn hơn hoặc bằng rent_date
+      enforced_by: service_rental
+  closed:
+    - rule: không còn rental_item trạng thái rented
+      enforced_by: service_rental

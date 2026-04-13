@@ -1,0 +1,191 @@
+name: refundPosOrder
+description: Hoàn tiền đơn bán theo chính sách, hỗ trợ hoàn toàn phần hoặc hoàn một phần item.
+version: 0.1.0-blueprint
+deprecated: false
+status: blueprint
+tags: [pos, refund, finance]
+category: pos/refund
+priority: high
+doc_ref: bp_pos-refund-order_v1.md
+
+http:
+  method: POST
+  path: /api/v1/pos/orders/{order_id}/refund
+  path_params:
+    order_id:
+      type: string
+  query_params: {}
+  request_body:
+    type: object
+  content_type: application/json
+
+parameters:
+  type: object
+  required: [order_id, refund_items, reason, request_id]
+  properties:
+    order_id:
+      type: string
+      description: Định danh đơn bán cần hoàn.
+    refund_items:
+      type: array
+      items:
+        type: object
+      description: Danh sách item cần hoàn, có thể là một phần.
+    reason:
+      type: string
+      description: Lý do hoàn tiền.
+    refund_method:
+      type: string
+      enum: [cash, bank_transfer, e_wallet, original_method]
+    request_id:
+      type: string
+      description: Idempotency key cho thao tác hoàn tiền.
+
+returns:
+  type: object
+  properties:
+    refund_id:
+      type: string
+    order_id:
+      type: string
+    refunded_total:
+      type: number
+    order_status:
+      type: string
+      enum: [refunded, partially_refunded]
+    processed_at:
+      type: string
+      format: date-time
+
+behavior:
+  deterministic: true
+  idempotent: true
+  retryable: true
+  side_effects: create-refund-and-update-order
+  latency: medium
+  cacheable: false
+
+errors:
+  - code: ORDER_NOT_FOUND
+    type: NotFoundError
+    http_status: 404
+    description: Không tìm thấy order_id.
+  - code: REFUND_WINDOW_EXPIRED
+    type: PolicyError
+    http_status: 409
+    description: Đơn đã quá thời gian cho phép hoàn tiền.
+  - code: ITEM_ALREADY_REFUNDED
+    type: ConflictError
+    http_status: 409
+    description: Item trong refund_items đã được hoàn trước đó.
+  - code: REFUND_EXCEEDS_PAID_AMOUNT
+    type: ValidationError
+    http_status: 400
+    description: Tổng tiền hoàn vượt quá số đã thanh toán.
+
+auth:
+  required: true
+  type: Bearer Token
+  roles: [manager]
+  scopes: [pos:refund]
+
+dependencies:
+  requires:
+    [authenticate, validateRefundPolicy, snapshotRefundAmount, createAuditLog]
+  provides: [refund_context]
+  conflicts_with: []
+
+blueprint_tracking:
+  prompt_hash: sha256:39A7AF9101A919D4E08BDE915D0A5E02541CE5904112C4727797B817AAADB8AF
+  prompt_summary: POS bắt buộc có hủy đơn và hoàn tiền, kiểm soát chặt dữ liệu tài chính.
+  assumptions:
+    - Hoàn tiền yêu cầu quyền manager để giảm rủi ro gian lận.
+    - Có thể hoàn từng item thay vì bắt buộc hoàn cả đơn.
+    - Mỗi item chỉ được hoàn tối đa một lần.
+  confidence: high
+  generated_at: 2026-04-13T23:08:30+07:00
+  generator_version: agent-skill-doc-generator@1.0
+
+implementation_notes:
+  suggested_tech_stack: [FastAPI, SQLAlchemy, immutable refund records]
+  open_questions:
+    - Cửa sổ hoàn tiền tối đa là bao nhiêu giờ hoặc ngày?
+    - Có cần quy trình phê duyệt hai bước cho refund lớn không?
+  acceptance_criteria:
+    - Hoàn tiền phải tạo bản ghi refund riêng, không sửa đè order cũ.
+    - Không thể hoàn vượt số tiền đã thanh toán thực tế.
+    - Mọi thao tác refund phải có audit log before/after.
+
+testing:
+  contract_tests:
+    - name: should_refund_order_successfully
+      type: happy_path
+      auto_generate: true
+      input:
+        order_id: ORD-0001
+        refund_items:
+          - item_id: ITM-0001
+            quantity: 1
+        reason: customer_request
+        request_id: req-rfd-001
+      expected_status: 200
+    - name: should_fail_when_refund_exceeds_paid_amount
+      type: error_case
+      auto_generate: true
+      input:
+        order_id: ORD-0001
+        refund_items:
+          - item_id: ITM-0001
+            quantity: 99
+        reason: invalid_refund
+        request_id: req-rfd-002
+      expected_status: 400
+      expected_error:
+        code: REFUND_EXCEEDS_PAID_AMOUNT
+    - name: should_fail_without_auth
+      type: auth_check
+      auto_generate: true
+      expected_status: 401
+  mock:
+    enabled: true
+    output_path: mocks/bp_pos-refund-order_v1.mock.json
+    happy_path:
+      delay_ms: 150
+      response:
+        refund_id: RFD-0001
+        order_id: ORD-0001
+        refunded_total: 90000
+        order_status: partially_refunded
+    error_cases:
+      - error_code: ORDER_NOT_FOUND
+        delay_ms: 70
+      - error_code: REFUND_WINDOW_EXPIRED
+        delay_ms: 90
+      - error_code: REFUND_EXCEEDS_PAID_AMOUNT
+        delay_ms: 60
+  frontend_scenarios:
+    - scenario: refund_loading
+      description: Màn hình refund khóa thao tác khi đang xử lý.
+      mock_config:
+        delay_ms: 2500
+      ui_state: loading
+      assertions:
+        - confirm refund button disabled
+        - overlay visible
+    - scenario: refund_success
+      description: Hoàn tiền thành công cập nhật trạng thái đơn.
+      mock_config:
+        status: 200
+      ui_state: success
+      assertions:
+        - refunded amount shown
+        - order status badge updated
+    - scenario: refund_policy_error
+      description: Quá thời gian hoàn tiền hiển thị cảnh báo policy.
+      mock_config:
+        status: 409
+        error_code: REFUND_WINDOW_EXPIRED
+      ui_state: error
+      assertions:
+        - policy warning visible
+        - retry disabled

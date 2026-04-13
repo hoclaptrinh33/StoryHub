@@ -1,0 +1,303 @@
+name: createPosOrder
+description: Tạo đơn bán từ danh sách item, snapshot giá tại thời điểm giao dịch, hỗ trợ discount và split payment.
+version: 0.1.0-blueprint
+deprecated: false
+status: blueprint
+tags: [pos, sales, pricing-snapshot]
+category: pos/order
+priority: high
+doc_ref: bp_pos-create-order_v1.md
+
+http:
+  method: POST
+  path: /api/v1/pos/orders
+  path_params: {}
+  query_params: {}
+  request_body:
+    type: object
+  content_type: application/json
+
+parameters:
+  type: object
+  required:
+    [item_ids, discount_type, discount_value, split_payments, request_id]
+  properties:
+    customer_id:
+      type: string
+      description: Khách hàng liên quan giao dịch, có thể null khi khách lẻ.
+    item_ids:
+      type: array
+      items:
+        type: string
+      description: Danh sách item vật lý cần bán.
+    discount_type:
+      type: string
+      enum: [none, percent, amount]
+    discount_value:
+      type: number
+      description: Giá trị giảm theo loại discount.
+    split_payments:
+      type: array
+      items:
+        type: object
+      description: Danh sách phương thức thanh toán và số tiền tương ứng.
+    note:
+      type: string
+      description: Ghi chú đơn hàng.
+    request_id:
+      type: string
+      description: Idempotency key để chống tạo đơn trùng.
+
+returns:
+  type: object
+  properties:
+    order_id:
+      type: string
+    status:
+      type: string
+      enum: [paid, cancelled]
+    subtotal:
+      type: number
+    discount_total:
+      type: number
+    grand_total:
+      type: number
+    payment_breakdown:
+      type: array
+      items:
+        type: object
+    line_items:
+      type: array
+      items:
+        type: object
+
+behavior:
+  deterministic: false
+  idempotent: true
+  retryable: true
+  side_effects: create-order-and-update-item-status
+  latency: medium
+  cacheable: false
+  preconditions:
+    - condition: tất cả item_ids đang available hoặc reserved hợp lệ cho khách hiện tại
+      check_via: inventory_items_batch_lookup
+      error_if_false: ITEM_NOT_AVAILABLE
+    - condition: tổng split_payments == grand_total sau discount
+      check_via: local_payment_validator
+      error_if_false: SPLIT_PAYMENT_MISMATCH
+  postconditions:
+    - effect: order.status = 'paid'
+      verifiable: true
+      verify_via: pos_order_lookup
+    - effect: item.status chuyển sang sold cho toàn bộ line items
+      verifiable: true
+      verify_via: inventory_items_batch_lookup
+  side_effect_scope:
+    reads: [item, pricing_policy, discount_policy]
+    writes: [pos_order, pos_order_item, pos_payment, item, audit_log]
+    external: [receipt_printer]
+  failure_strategy:
+    ORDER_LOCK_CONFLICT:
+      action: retry
+      max_retries: 3
+      backoff: exponential
+      backoff_base_ms: 150
+      fallback: none
+      alert: false
+    PRICE_SNAPSHOT_MISSING:
+      action: abort
+      max_retries: 0
+      backoff: fixed
+      backoff_base_ms: 0
+      alert: true
+    SPLIT_PAYMENT_MISMATCH:
+      action: abort
+      max_retries: 0
+      backoff: fixed
+      backoff_base_ms: 0
+      alert: false
+  frontend:
+    loading_strategy: overlay
+    error_surface: inline
+    empty_state: illustration
+    cache_strategy: none
+    retry_ui: true
+    optimistic_updates: true
+
+errors:
+  - code: ITEM_NOT_AVAILABLE
+    type: ConflictError
+    http_status: 409
+    description: Có item không ở trạng thái available hoặc reserved bởi khách khác.
+  - code: SPLIT_PAYMENT_MISMATCH
+    type: ValidationError
+    http_status: 400
+    description: Tổng split payment không khớp grand_total.
+  - code: PRICE_SNAPSHOT_MISSING
+    type: DataIntegrityError
+    http_status: 500
+    description: Không tạo được snapshot giá tại thời điểm giao dịch.
+  - code: ORDER_LOCK_CONFLICT
+    type: LockTimeoutError
+    http_status: 423
+    description: Không lấy được lock cho toàn bộ item trong đơn.
+
+auth:
+  required: true
+  type: Bearer Token
+  roles: [cashier, manager]
+  scopes: [pos:write]
+  permissions:
+    - role: cashier
+      access: conditional
+      condition: user.branch_id == resource.branch_id
+      fields_allowed:
+        [item_ids, discount_type, discount_value, split_payments, request_id]
+      fields_denied: [price_override]
+    - role: manager
+      access: full
+      condition: ""
+      fields_allowed: []
+      fields_denied: []
+  frontend_auth:
+    hide_actions: [button_refund_order]
+    disable_actions: [input_price_override]
+    route_guard:
+      min_role: cashier
+      redirect_to: /403
+      show_message: Bạn không có quyền tạo đơn bán.
+  data_filtering:
+    auto_filter: true
+    filter_field: branch_id
+
+dependencies:
+  requires:
+    - tool: authenticate
+      order: 1
+      mandatory: true
+      provides_data: auth_context
+    - tool: lockItemsForSale
+      order: 2
+      mandatory: true
+      provides_data: item_locks
+    - tool: snapshotSellPrice
+      order: 3
+      mandatory: true
+      provides_data: final_prices
+    - tool: validateSplitPayment
+      order: 3
+      mandatory: true
+      provides_data: payment_validation
+    - tool: createAuditLog
+      order: 4
+      mandatory: false
+      provides_data: audit_record
+  conditional:
+    - tool: sendReceiptNotification
+      condition: split_payments contains bank_transfer OR e_wallet
+  fallback:
+    - tool: localReceiptQueue
+      replaces: receipt_printer
+      when: printer_offline
+      degraded: true
+  provides: [order_context]
+  conflicts_with: [createRentalContract]
+  conflict_reason: giao dịch trên cùng item không được chạy song song
+
+blueprint_tracking:
+  prompt_hash: sha256:39A7AF9101A919D4E08BDE915D0A5E02541CE5904112C4727797B817AAADB8AF
+  prompt_summary: POS tạo đơn nhanh theo scan barcode, có discount, split payment, hủy và hoàn tiền.
+  assumptions:
+    - Một item vật lý chỉ xuất hiện tối đa một lần trong đơn bán.
+    - Trạng thái item chuyển sang sold ngay khi thanh toán thành công.
+    - Snapshot giá là bắt buộc cho mọi line item.
+  confidence: high
+  generated_at: 2026-04-13T23:08:30+07:00
+  generator_version: agent-skill-doc-generator@1.0
+
+implementation_notes:
+  suggested_tech_stack: [FastAPI, SQLAlchemy, SQLite transaction]
+  open_questions:
+    - Có cần cho phép đơn ở trạng thái draft khi chưa thanh toán xong không?
+    - Cần giới hạn số phương thức split payment tối đa bao nhiêu?
+  acceptance_criteria:
+    - Tạo đơn phải lock đủ item rồi mới commit.
+    - Mọi order_item có final_sell_price không được null.
+    - split_payments phải cân bằng tuyệt đối với grand_total.
+
+testing:
+  contract_tests:
+    - name: should_create_paid_order
+      type: happy_path
+      auto_generate: true
+      input:
+        item_ids: [ITM-0001, ITM-0002]
+        discount_type: amount
+        discount_value: 10000
+        split_payments:
+          - method: cash
+            amount: 100000
+          - method: bank_transfer
+            amount: 70000
+        request_id: req-pos-001
+      expected_status: 200
+    - name: should_fail_when_split_payment_mismatch
+      type: error_case
+      auto_generate: true
+      input:
+        item_ids: [ITM-0001]
+        discount_type: none
+        discount_value: 0
+        split_payments:
+          - method: cash
+            amount: 1000
+        request_id: req-pos-002
+      expected_status: 400
+      expected_error:
+        code: SPLIT_PAYMENT_MISMATCH
+    - name: should_fail_without_auth
+      type: auth_check
+      auto_generate: true
+      expected_status: 401
+  mock:
+    enabled: true
+    output_path: mocks/bp_pos-create-order_v1.mock.json
+    happy_path:
+      delay_ms: 180
+      response:
+        order_id: ORD-0001
+        status: paid
+        grand_total: 170000
+    error_cases:
+      - error_code: ITEM_NOT_AVAILABLE
+        delay_ms: 80
+      - error_code: SPLIT_PAYMENT_MISMATCH
+        delay_ms: 50
+      - error_code: ORDER_LOCK_CONFLICT
+        delay_ms: 300
+  frontend_scenarios:
+    - scenario: checkout_loading
+      description: Khóa thao tác khi đang xử lý thanh toán.
+      mock_config:
+        delay_ms: 3000
+      ui_state: paying
+      assertions:
+        - pay button disabled
+        - overlay visible
+    - scenario: checkout_success
+      description: Đơn tạo thành công và reset giỏ.
+      mock_config:
+        status: 200
+      ui_state: success
+      assertions:
+        - success toast visible
+        - cart cleared
+    - scenario: payment_mismatch_error
+      description: Lệch tổng tiền thì không được submit.
+      mock_config:
+        status: 400
+        error_code: SPLIT_PAYMENT_MISMATCH
+      ui_state: error
+      assertions:
+        - inline validation visible
+        - payment panel focused

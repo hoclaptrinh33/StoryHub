@@ -1,0 +1,199 @@
+name: createRentalContract
+description: Tạo phiếu thuê từ danh sách item, lock item, snapshot giá thuê và tiền cọc tại thời điểm giao dịch.
+version: 0.1.0-blueprint
+deprecated: false
+status: blueprint
+tags: [rental, contract, deposit]
+category: rental/contract
+priority: high
+doc_ref: bp_rental-create-contract_v1.md
+
+http:
+  method: POST
+  path: /api/v1/rentals/contracts
+  path_params: {}
+  query_params: {}
+  request_body:
+    type: object
+  content_type: application/json
+
+parameters:
+  type: object
+  required: [customer_id, item_ids, due_date, request_id]
+  properties:
+    customer_id:
+      type: string
+      description: Khách hàng thuê.
+    item_ids:
+      type: array
+      items:
+        type: string
+      description: Danh sách item vật lý cho thuê.
+    due_date:
+      type: string
+      format: date-time
+      description: Hạn trả dự kiến.
+    deposit_policy:
+      type: string
+      enum: [auto, manual]
+      description: Chính sách tính cọc.
+    manual_deposit:
+      type: number
+      description: Giá trị cọc nhập tay khi dùng policy manual.
+    request_id:
+      type: string
+      description: Idempotency key cho thao tác tạo phiếu.
+
+returns:
+  type: object
+  properties:
+    contract_id:
+      type: string
+    customer_id:
+      type: string
+    rent_date:
+      type: string
+      format: date-time
+    due_date:
+      type: string
+      format: date-time
+    deposit_total:
+      type: number
+    rental_items:
+      type: array
+      items:
+        type: object
+
+behavior:
+  deterministic: false
+  idempotent: true
+  retryable: true
+  side_effects: create-contract-and-update-item-status
+  latency: medium
+  cacheable: false
+
+errors:
+  - code: CUSTOMER_BLACKLISTED
+    type: PolicyError
+    http_status: 403
+    description: Khách hàng đang bị blacklist nên không thể tạo phiếu thuê.
+  - code: ITEM_NOT_AVAILABLE
+    type: ConflictError
+    http_status: 409
+    description: Có item không sẵn sàng cho thuê.
+  - code: DEPOSIT_NOT_ENOUGH
+    type: ValidationError
+    http_status: 400
+    description: Tiền cọc không đáp ứng mức tối thiểu.
+  - code: RENTAL_LOCK_CONFLICT
+    type: LockTimeoutError
+    http_status: 423
+    description: Không lấy được lock cho một hoặc nhiều item.
+
+auth:
+  required: true
+  type: Bearer Token
+  roles: [cashier, manager]
+  scopes: [rental:write]
+
+dependencies:
+  requires:
+    [
+      authenticate,
+      lockItemsForRental,
+      snapshotRentPrice,
+      evaluateDepositPolicy,
+      createAuditLog,
+    ]
+  provides: [rental_contract_context]
+  conflicts_with: [sellItems]
+
+blueprint_tracking:
+  prompt_hash: sha256:39A7AF9101A919D4E08BDE915D0A5E02541CE5904112C4727797B817AAADB8AF
+  prompt_summary: Tạo phiếu thuê theo customer, item list, due date và tiền cọc; thao tác trên item vật lý.
+  assumptions:
+    - Một item chỉ nằm trong một contract active tại cùng thời điểm.
+    - final_rent_price và final_deposit bắt buộc lưu trên rental_item.
+    - due_date phải lớn hơn hoặc bằng rent_date.
+  confidence: high
+  generated_at: 2026-04-13T23:08:30+07:00
+  generator_version: agent-skill-doc-generator@1.0
+
+implementation_notes:
+  suggested_tech_stack: [FastAPI, SQLAlchemy, SQLite transaction]
+  open_questions:
+    - Rule cọc có phụ thuộc membership level không?
+    - Có cần giới hạn số lượng item tối đa mỗi contract?
+  acceptance_criteria:
+    - Tạo contract thành công luôn sinh snapshot rent/deposit cho từng item.
+    - Item được lock và chuyển trạng thái rented trong cùng transaction.
+    - Không cho phép tạo contract cho khách blacklist.
+
+testing:
+  contract_tests:
+    - name: should_create_rental_contract_successfully
+      type: happy_path
+      auto_generate: true
+      input:
+        customer_id: CUS-0001
+        item_ids: [ITM-0003, ITM-0004]
+        due_date: "2026-04-21T23:59:59+07:00"
+        request_id: req-rct-001
+      expected_status: 200
+    - name: should_fail_for_blacklisted_customer
+      type: error_case
+      auto_generate: true
+      input:
+        customer_id: CUS-BLACKLISTED
+        item_ids: [ITM-0003]
+        due_date: "2026-04-21T23:59:59+07:00"
+        request_id: req-rct-002
+      expected_status: 403
+      expected_error:
+        code: CUSTOMER_BLACKLISTED
+    - name: should_fail_without_auth
+      type: auth_check
+      auto_generate: true
+      expected_status: 401
+  mock:
+    enabled: true
+    output_path: mocks/bp_rental-create-contract_v1.mock.json
+    happy_path:
+      delay_ms: 180
+      response:
+        contract_id: RCT-0001
+        customer_id: CUS-0001
+        deposit_total: 300000
+    error_cases:
+      - error_code: CUSTOMER_BLACKLISTED
+        delay_ms: 60
+      - error_code: ITEM_NOT_AVAILABLE
+        delay_ms: 80
+      - error_code: DEPOSIT_NOT_ENOUGH
+        delay_ms: 80
+  frontend_scenarios:
+    - scenario: rental_create_loading
+      description: Form tạo phiếu thuê hiển thị loading khi submit.
+      mock_config:
+        delay_ms: 2200
+      ui_state: loading
+      assertions:
+        - submit button disabled
+        - loading indicator visible
+    - scenario: rental_create_success
+      description: Tạo phiếu thành công hiển thị contract id.
+      mock_config:
+        status: 200
+      ui_state: success
+      assertions:
+        - contract id displayed
+        - rented items listed
+    - scenario: rental_blacklist_error
+      description: Khách bị blacklist không được tạo hợp đồng.
+      mock_config:
+        status: 403
+        error_code: CUSTOMER_BLACKLISTED
+      ui_state: error
+      assertions:
+        - blacklist warning visible
+        - submit blocked

@@ -1,0 +1,196 @@
+name: getRevenueSummaryReport
+description: Tổng hợp doanh thu bán, thuê, tiền phạt và top truyện theo khoảng thời gian.
+version: 0.1.0-blueprint
+deprecated: false
+status: blueprint
+tags: [report, revenue, analytics]
+category: report/revenue
+priority: medium
+doc_ref: bp_report-revenue-summary_v1.md
+
+http:
+  method: POST
+  path: /api/v1/reports/revenue-summary
+  path_params: {}
+  query_params: {}
+  request_body:
+    type: object
+  content_type: application/json
+
+parameters:
+  type: object
+  required: [from_date, to_date, group_by, request_id]
+  properties:
+    from_date:
+      type: string
+      format: date-time
+    to_date:
+      type: string
+      format: date-time
+    group_by:
+      type: string
+      enum: [day, week, month]
+    include_top_titles:
+      type: boolean
+      default: true
+    include_inventory_alert:
+      type: boolean
+      default: true
+    request_id:
+      type: string
+      description: Idempotency key.
+
+returns:
+  type: object
+  properties:
+    sell_revenue:
+      type: number
+    rental_revenue:
+      type: number
+    penalty_revenue:
+      type: number
+    total_revenue:
+      type: number
+    top_sell_titles:
+      type: array
+      items:
+        type: object
+    top_rent_titles:
+      type: array
+      items:
+        type: object
+    inventory_alerts:
+      type: array
+      items:
+        type: object
+
+behavior:
+  deterministic: true
+  idempotent: true
+  retryable: true
+  side_effects: read-only
+  latency: medium
+  cacheable: true
+
+errors:
+  - code: INVALID_DATE_RANGE
+    type: ValidationError
+    http_status: 400
+    description: Khoảng thời gian from_date và to_date không hợp lệ.
+  - code: REPORT_RANGE_TOO_LARGE
+    type: ValidationError
+    http_status: 400
+    description: Khoảng thời gian vượt giới hạn cho phép để tổng hợp.
+  - code: DATA_SOURCE_LOCKED
+    type: LockTimeoutError
+    http_status: 423
+    description: Dữ liệu báo cáo đang bị lock bởi tác vụ nền.
+
+auth:
+  required: true
+  type: Bearer Token
+  roles: [manager, owner]
+  scopes: [report:read]
+
+dependencies:
+  requires:
+    [
+      authenticate,
+      querySellSnapshots,
+      queryRentalSettlements,
+      computeTopTitles,
+      computeInventoryAlerts,
+    ]
+  provides: [revenue_report_context]
+  conflicts_with: []
+
+blueprint_tracking:
+  prompt_hash: sha256:39A7AF9101A919D4E08BDE915D0A5E02541CE5904112C4727797B817AAADB8AF
+  prompt_summary: Báo cáo cần doanh thu bán, thuê, phạt, top truyện và cảnh báo tồn kho.
+  assumptions:
+    - Dữ liệu báo cáo lấy từ snapshot giao dịch thay vì bảng giá hiện tại.
+    - Báo cáo chỉ đọc dữ liệu, không sinh side effect.
+    - Có thể cache báo cáo theo key from/to/group_by.
+  confidence: high
+  generated_at: 2026-04-13T23:08:30+07:00
+  generator_version: agent-skill-doc-generator@1.0
+
+implementation_notes:
+  suggested_tech_stack: [SQLAlchemy aggregate queries, cached report layer]
+  open_questions:
+    - Giới hạn khoảng thời gian tối đa cho một lần query là bao lâu?
+    - Có cần so sánh kỳ trước trong cùng API không?
+  acceptance_criteria:
+    - Báo cáo phải tách rõ doanh thu bán, thuê và tiền phạt.
+    - Top titles phải hỗ trợ cả bán và thuê.
+    - Không phụ thuộc giá hiện tại, chỉ dùng dữ liệu snapshot.
+
+testing:
+  contract_tests:
+    - name: should_return_revenue_summary_successfully
+      type: happy_path
+      auto_generate: true
+      input:
+        from_date: "2026-04-01T00:00:00+07:00"
+        to_date: "2026-04-14T23:59:59+07:00"
+        group_by: day
+        request_id: req-rpt-001
+      expected_status: 200
+    - name: should_fail_for_invalid_date_range
+      type: error_case
+      auto_generate: true
+      input:
+        from_date: "2026-04-15T00:00:00+07:00"
+        to_date: "2026-04-14T00:00:00+07:00"
+        group_by: day
+        request_id: req-rpt-002
+      expected_status: 400
+      expected_error:
+        code: INVALID_DATE_RANGE
+    - name: should_fail_without_auth
+      type: auth_check
+      auto_generate: true
+      expected_status: 401
+  mock:
+    enabled: true
+    output_path: mocks/bp_report-revenue-summary_v1.mock.json
+    happy_path:
+      delay_ms: 220
+      response:
+        sell_revenue: 35000000
+        rental_revenue: 12000000
+        penalty_revenue: 1800000
+        total_revenue: 48800000
+    error_cases:
+      - error_code: INVALID_DATE_RANGE
+        delay_ms: 40
+      - error_code: REPORT_RANGE_TOO_LARGE
+        delay_ms: 60
+      - error_code: DATA_SOURCE_LOCKED
+        delay_ms: 120
+  frontend_scenarios:
+    - scenario: report_loading
+      description: Dashboard hiển thị skeleton khi tải báo cáo.
+      mock_config:
+        delay_ms: 2500
+      ui_state: loading
+      assertions:
+        - chart skeleton visible
+        - export button disabled
+    - scenario: report_success
+      description: Báo cáo hiển thị đủ revenue và top titles.
+      mock_config:
+        status: 200
+      ui_state: success
+      assertions:
+        - total revenue shown
+        - top titles list rendered
+    - scenario: report_range_error
+      description: Date range sai hiển thị validation tại filter.
+      mock_config:
+        status: 400
+        error_code: INVALID_DATE_RANGE
+      ui_state: error
+      assertions:
+        - date filter error visible
+        - submit blocked
