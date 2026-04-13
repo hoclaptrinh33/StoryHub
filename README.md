@@ -1,3 +1,4 @@
+```text
 📚 Hệ Thống Quản Lý Cửa Hàng Bán & Cho Thuê Truyện
 
 Báo cáo Tuần 1 — Mô tả chức năng & Phác thảo giao diện
@@ -55,11 +56,14 @@ Mật khẩu được mã hóa trước khi lưu vào cơ sở dữ liệu.
 
 3. Yêu Cầu Phi Chức Năng (Non-Functional Requirements)
 Tiêu chíYêu cầuHiệu năngThời gian phản hồi các thao tác cơ bản < 2 giâyTính khả dụngGiao diện trực quan, nhân viên mới có thể thao tác cơ bản sau < 30 phút làm quenBảo mậtMật khẩu được hash (bcrypt), phân quyền rõ ràng theo vai tròTương thíchChạy ổn định trên Windows 10 trở lênĐộ tin cậyDữ liệu không bị mất khi tắt đột ngột (commit transaction)Bảo trìCode được tổ chức theo mô hình MVC, dễ mở rộng thêm module
+```
 
+```bash
 4. Thiết Kế UI — Wireframe & Mockup
 Giao diện được thiết kế theo tiêu chí tối giản, thao tác nhanh — ưu tiên cho nhân viên thu ngân làm việc trong môi trường bận rộn.
 
 Màn hình 1 — Đăng Nhập (Login)
+
 ┌─────────────────────────────────┐
 │         TruyenShop              │
 │    Hệ thống quản lý cửa hàng    │
@@ -71,8 +75,11 @@ Màn hình 1 — Đăng Nhập (Login)
 │                                 │
 │     Phân quyền: Admin / Staff   │
 └─────────────────────────────────┘
-Mô tả: Màn hình khởi động ứng dụng. Nhân viên nhập tài khoản, hệ thống xác thực và điều hướng đến Dashboard tương ứng với quyền hạn.
 
+Mô tả: Màn hình khởi động ứng dụng. Nhân viên nhập tài khoản, hệ thống xác thực và điều hướng đến Dashboard tương ứng với quyền hạn.
+```
+
+```bash
 Màn hình 2 — Dashboard (Tổng quan)
 ┌──────────────────────────────────────────────────────────┐
 │  [KPI] Tổng truyện  │ Đang thuê │ Doanh thu hôm nay │ KH│
@@ -85,7 +92,9 @@ Màn hình 2 — Dashboard (Tổng quan)
 │  1. Conan T.100      │                                   │
 └──────────────────────┴───────────────────────────────────┘
 Mô tả: Trang chủ sau khi đăng nhập. Hiển thị 4 chỉ số KPI, danh sách cảnh báo truyện quá hạn, biểu đồ doanh thu và giao dịch mới nhất.
+```
 
+```bash
 Màn hình 3 — Quản Lý Kho Truyện
 ┌──────────────────────────────────────────────────────────┐
 │  [ Tìm kiếm: tên, thể loại... ]  [ Lọc ]  [+ Thêm mới] │
@@ -98,7 +107,9 @@ Màn hình 3 — Quản Lý Kho Truyện
 └──────┴──────────────┴──────────┴─────────┴───────┴───────┘
   Trạng thái: ✅ Còn hàng   🟡 Đang thuê   ❌ Hết hàng
 Mô tả: Giao diện dạng bảng (Data Grid). Tích hợp tìm kiếm, lọc theo thể loại/trạng thái, nút thêm mới và chỉnh sửa từng dòng.
+```
 
+```bash
 Màn hình 4 — Bán Hàng / Cho Thuê (Split-screen)
 ┌──────────────────────┬───────────────────────────────────┐
 │   CHỌN TRUYỆN        │   GIỎ HÀNG                        │
@@ -113,7 +124,9 @@ Màn hình 4 — Bán Hàng / Cho Thuê (Split-screen)
 │                      │  [ Thanh toán & In hóa đơn ]      │
 └──────────────────────┴───────────────────────────────────┘
 Mô tả: Giao diện chia đôi màn hình. Bên trái chọn truyện, bên phải là giỏ hàng với tổng tiền, mã khuyến mãi và nút thanh toán. Có tab chuyển đổi giữa chế độ Bán và Cho thuê.
+```
 
+```bash
 Màn hình 5 — Quản Lý Khách Hàng
 ┌──────────────────────────────────────────────────────────┐
 │  [ Tìm khách hàng... ]                 [+ Thêm khách]   │
@@ -126,7 +139,9 @@ Màn hình 5 — Quản Lý Khách Hàng
 └───┴──────────────┴─────────────┴───────┴──────────┴──────┘
   ⚠ = Đang có phiếu thuê quá hạn
 Mô tả: Danh sách khách hàng với badge phân hạng (Thường / VIP) và cờ cảnh báo quá hạn. Nút Xem mở chi tiết lịch sử giao dịch của từng cá nhân.
+```
 
+```bash
 Màn hình 6 — Trả Truyện (bổ sung)
 ┌──────────────────────────────────────────────────────────┐
 │  Phiếu thuê: #PT0042   Khách: Nguyễn Văn An             │
@@ -142,7 +157,9 @@ Màn hình 6 — Trả Truyện (bổ sung)
 │              [ Xác nhận trả truyện ]                    │
 └──────────────────────────────────────────────────────────┘
 Mô tả: Màn hình xử lý trả truyện. Hệ thống tự tính số ngày trễ, phí phạt và số tiền cọc hoàn lại. Nhân viên chọn tình trạng truyện trước khi xác nhận.
+```
 
+```bash
 5. Sơ Đồ Use Case
 Các Actor
 ActorMô tảAdminQuản trị viên — toàn quyền hệ thốngStaffNhân viên bán hàng — thao tác giao dịch hàng ngàyKhách hàngNgười mua / thuê truyện (tương tác gián tiếp qua Staff)
@@ -167,6 +184,7 @@ Actor: Staff
 Thành phầnCông nghệNgôn ngữ lập trìnhPython 3.xGiao diện (Frontend)Tkinter / PyQt5 (QTDesigner)Cơ sở dữ liệuSQLite (hoặc MySQL)Thiết kế mockupCanva / Draw.ioQuản lý mã nguồnGit & GitHub
 
 7. Cấu Trúc Thư Mục
+```text
 QuanLyCuaHangTruyen/
 │
 ├── docs/
@@ -191,7 +209,9 @@ QuanLyCuaHangTruyen/
 │
 ├── README.md
 └── requirements.txt
+```
 
+```bash
 8. Tài Liệu Đính Kèm Tuần 1
 FileMô tảdocs/URD_QuanLyCuaHangTruyen.pdfTài liệu đặc tả yêu cầu chi tiếtdocs/mockups/*.pngHình ảnh thiết kế giao diện (6 màn hình)docs/diagrams/ERD.pngSơ đồ thực thể quan hệdocs/diagrams/UseCase.pngSơ đồ use case
 
@@ -199,3 +219,4 @@ FileMô tảdocs/URD_QuanLyCuaHangTruyen.pdfTài liệu đặc tả yêu cầu c
 📅 Tuần 1 — Hoàn thành: Mô tả chức năng & Phác thảo giao diện
 📅 Tuần 2 — Tiếp theo: Xây dựng Frontend bằng Tkinter / QTDesigner
 📅 Tuần 3 — Tiếp theo: Thiết kế Backend, Database & tích hợp hoàn chỉnh
+```
