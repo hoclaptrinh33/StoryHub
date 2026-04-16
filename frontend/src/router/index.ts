@@ -8,22 +8,22 @@ const routes = [
         component: Dashboard,
     },
     {
-        path: '/manager',
+        path: '/quan-ly',
         name: 'Manager',
         component: () => import('../views/Placeholder.vue'), // Lazy load placeholders
     },
     {
-        path: '/rental',
+        path: '/ban-hang',
         name: 'Rental',
         component: () => import('../views/Placeholder.vue'),
     },
     {
-        path: '/inventory',
+        path: '/kho',
         name: 'Inventory',
         component: () => import('../views/Placeholder.vue'),
     },
     {
-        path: '/customers',
+        path: '/khach-hang',
         name: 'Customers',
         component: () => import('../views/Placeholder.vue'),
     },

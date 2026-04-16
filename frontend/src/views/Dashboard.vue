@@ -5,6 +5,8 @@ import DefaultLayout from '../components/layout/defaultLayout.vue'
 <template>
   <DefaultLayout>
     <div class="dashboard">
+
+
       <div class="actions-container">
         <div class="main-actions">
             <button class="btn-main primary">+ TẠO ĐƠN MỚI (BÁN)</button>
@@ -15,7 +17,8 @@ import DefaultLayout from '../components/layout/defaultLayout.vue'
             <button class="btn-outline">Quản lý truyện</button>
             <button class="btn-outline">Quản lý khách hàng</button>
         </div>
-    </div>
+      </div>
+
       <div class="content-split">
         <section class="card">
           <h3>TRUYỆN MỚI NHẬP</h3>
@@ -35,6 +38,9 @@ import DefaultLayout from '../components/layout/defaultLayout.vue'
 </template>
 
 <style scoped>
+.dashboard-title { margin-bottom: 15px; }
+.search-bar { margin-bottom: 20px; }
+.search-bar input { width: 100%; max-width: 400px; padding: 10px; border: 1px solid #ddd; border-radius: 6px; }
 .dashboard { padding: 20px; background: #f8fafc; min-height: 100vh; }
 
 .navbar { display: flex; align-items: center; gap: 20px; padding-bottom: 20px; border-bottom: 1px solid #ddd; }
