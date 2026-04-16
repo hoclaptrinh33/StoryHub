@@ -9,8 +9,8 @@ const routes = [
     },
     {
         path: '/quan-ly',
-        name: 'Manager',
-        component: () => import('../views/Placeholder.vue'), // Lazy load placeholders
+        name: 'Manager_title',
+        component: () => import('../views/manager_title.vue'), // Lazy load placeholders
     },
     {
         path: '/ban-hang',
