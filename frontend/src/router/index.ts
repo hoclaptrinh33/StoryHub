@@ -10,17 +10,22 @@ const routes = [
     {
         path: '/quan-ly',
         name: 'Manager_title',
-        component: () => import('../views/manager_title.vue'), // Lazy load placeholders
+        component: () => import('../views/Placeholder.vue'), // Lazy load placeholders
     },
     {
         path: '/ban-hang',
         name: 'Rental',
-        component: () => import('../views/Placeholder.vue'),
+        component: () => import('../views/sale.vue'),
+    },
+    {
+        path: '/khuyen-mai',
+        name: 'Promotion',
+        component: () => import('../views/Promotion.vue'),
     },
     {
         path: '/kho',
         name: 'Inventory',
-        component: () => import('../views/Placeholder.vue'),
+        component: () => import('../views/manager_title.vue'),
     },
     {
         path: '/khach-hang',
