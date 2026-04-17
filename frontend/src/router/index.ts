@@ -10,7 +10,7 @@ const routes = [
     {
         path: '/quan-ly',
         name: 'Manager_title',
-        component: () => import('../views/Placeholder.vue'), // Lazy load placeholders
+        component: () => import('../views/manager.vue'), // Lazy load placeholders
     },
     {
         path: '/ban-hang',
@@ -32,6 +32,11 @@ const routes = [
         name: 'Customers',
         component: () => import('../views/Placeholder.vue'),
     },
+    {
+        path: '/bao-cao',
+        name: 'Report',
+        component: () => import('../views/report.vue'),
+    },  
     {
         path: '/settings',
         name: 'Settings',
