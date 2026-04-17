@@ -1,562 +1,211 @@
 <script setup lang="ts">
-import DefaultLayout from '../components/layout/defaultLayout.vue'
 import { ref, computed, inject } from 'vue';
+import { useRouter } from 'vue-router';
+import DefaultLayout from '../components/layout/defaultLayout.vue';
 
-const addNotification = inject('addNotification') as any;
+const router = useRouter();
+const addNotification = inject('addNotification') as (type: string, msg: string) => void;
 
+// UI State
 const mode = ref<'sale' | 'rental'>('sale');
 const searchQuery = ref('');
 
+// Mock Data for testing
 const products = ref([
-  { id: 1, name: 'One Piece - Tập 105', price: 25000, rent_price: 5000, image: 'https://via.placeholder.com/150x200', stock: 15 },
-  { id: 2, name: 'Conan - Tập 98', price: 20000, rent_price: 4000, image: 'https://via.placeholder.com/150x200', stock: 8 },
-  { id: 3, name: 'Spy x Family - Tập 10', price: 28000, rent_price: 6000, image: 'https://via.placeholder.com/150x200', stock: 12 },
-  { id: 4, name: 'Jujutsu Kaisen - Tập 20', price: 30000, rent_price: 7000, image: 'https://via.placeholder.com/150x200', stock: 5 },
-  { id: 5, name: 'Attack on Titan - Tập 34', price: 35000, rent_price: 8000, image: 'https://via.placeholder.com/150x200', stock: 20 },
-  { id: 6, name: 'Demon Slayer - Tập 23', price: 27000, rent_price: 5000, image: 'https://via.placeholder.com/150x200', stock: 10 },
+  { id: 1, name: 'One Piece - Tập 105', price: 25000, rent_price: 5000, image: 'https://via.placeholder.com/150x200?text=OP105', code: 'OP105' },
+  { id: 2, name: 'Conan - Tập 98', price: 20000, rent_price: 4000, image: 'https://via.placeholder.com/150x200?text=CONAN98', code: 'CONAN98' },
+  { id: 3, name: 'Spy x Family - Tập 10', price: 28000, rent_price: 6000, image: 'https://via.placeholder.com/150x200?text=SPY10', code: 'SPY10' },
+  { id: 4, name: 'Jujutsu Kaisen - Tập 20', price: 30000, rent_price: 7000, image: 'https://via.placeholder.com/150x200?text=JJK20', code: 'JJK20' },
+  { id: 5, name: 'Naruto - Tập 72', price: 22000, rent_price: 4500, image: 'https://via.placeholder.com/150x200?text=NARUTO', code: 'NARU72' },
+  { id: 6, name: 'Doraemon - Tập 1', price: 18000, rent_price: 3000, image: 'https://via.placeholder.com/150x200?text=DORA', code: 'DORA01' },
 ]);
 
 const cart = ref<any[]>([]);
-const totalAmount = computed(() => {
+
+// Computed
+const filteredProducts = computed(() => {
+  return products.value.filter(p => 
+    p.name.toLowerCase().includes(searchQuery.value.toLowerCase()) || 
+    p.code.toLowerCase().includes(searchQuery.value.toLowerCase())
+  );
+});
+
+const subtotal = computed(() => {
   return cart.value.reduce((sum, item) => sum + (mode.value === 'sale' ? item.price : item.rent_price), 0);
 });
 
+// Methods
+const formatCurrency = (v: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(v);
+
 const addToCart = (product: any) => {
   cart.value.push({ ...product, cartId: Date.now() });
-  addNotification('success', `Đã thêm ${product.name} vào giỏ hàng`);
+  addNotification('success', `Đã thêm ${product.name}`);
 };
 
 const removeFromCart = (cartId: number) => {
   cart.value = cart.value.filter(item => item.cartId !== cartId);
 };
 
-const history = ref([
-  { id: 'DH001', customer: 'Nguyễn Văn A', type: 'Bán', items: 'One Piece x1, Conan x1', total: 45000, date: '2026-04-16 10:30' },
-  { id: 'DH002', customer: 'Trần Thị B', type: 'Thuê', items: 'Spy x Family x2', total: 12000, date: '2026-04-16 11:15' },
-]);
-
-const confirmTransaction = () => {
+const handleConfirm = () => {
   if (cart.value.length === 0) {
-    addNotification('warning', 'Giỏ hàng đang trống!');
-    return;
+    addNotification('info', 'Đang chuyển hướng đến trang tạo đơn mới...');
+  } else {
+    addNotification('success', 'Đã lưu giỏ hàng tạm thời và chuyển hướng thanh toán');
   }
   
-  const newOrder = {
-    id: 'DH' + Math.floor(100 + Math.random() * 900),
-    customer: 'Khách lẻ',
-    type: mode.value === 'sale' ? 'Bán' : 'Thuê',
-    items: cart.value.map(i => i.name).join(', '),
-    total: totalAmount.value,
-    date: new Date().toLocaleString()
-  };
-  
-  history.value.unshift(newOrder);
-  cart.value = [];
-  addNotification('success', 'Xác nhận giao dịch thành công!');
+  // Chuyển hướng theo mode
+  if (mode.value === 'sale') {
+    router.push('/order-sale');
+  } else {
+    router.push('/rentalorder');
+  }
 };
-
-const filteredProducts = computed(() => {
-  return products.value.filter(p => p.name.toLowerCase().includes(searchQuery.value.toLowerCase()));
-});
 </script>
 
 <template>
   <DefaultLayout>
-    <div class="sales-page">
-      <div class="main-header">
-        <h2 class="title">Bán hàng & Cho thuê</h2>
-        <div class="mode-toggle">
-          <button 
-            :class="{ active: mode === 'sale' }" 
-            @click="mode = 'sale'; cart = []"
-          >
-            🛒 Bán hàng
-          </button>
-          <button 
-            :class="{ active: mode === 'rental' }" 
-            @click="mode = 'rental'; cart = []"
-          >
-            📖 Cho thuê
-          </button>
-        </div>
-      </div>
-
-      <div class="sales-content">
-        <!-- Left Section: Search & Products -->
-        <div class="products-section">
-          <div class="search-container">
-            <span class="search-icon">🔍</span>
-            <input 
-              v-model="searchQuery"
-              type="text" 
-              placeholder="Tìm kiếm hoặc quét mã vạch truyện..." 
-              class="search-input" 
-            />
+    <div class="pos-container">
+      <div class="pos-layout">
+        <!-- Left Column: Search & Products -->
+        <div class="products-column">
+          <div class="header-lux-area">
+             <div class="title-meta">
+                <h2>Bán Hàng & Cho Thuê</h2>
+                <p>Tìm kiếm sản phẩm hoặc quét mã vạch để bắt đầu</p>
+             </div>
+             <div class="mode-pills">
+                <button :class="{ active: mode === 'sale' }" @click="mode = 'sale'; cart = []">BÁN HÀNG</button>
+                <button :class="{ active: mode === 'rental' }" @click="mode = 'rental'; cart = []">CHO THUÊ</button>
+             </div>
           </div>
 
-          <div class="product-grid">
-            <div 
-              v-for="p in filteredProducts" 
-              :key="p.id" 
-              class="product-card"
-              @click="addToCart(p)"
-            >
-              <div class="image-wrapper">
-                <img :src="p.image" :alt="p.name" />
-                <span class="stock-badge">Kho: {{ p.stock }}</span>
-              </div>
-              <div class="product-info">
-                <span class="product-name">{{ p.name }}</span>
-                <span class="product-price">
-                  {{ mode === 'sale' ? p.price.toLocaleString() : p.rent_price.toLocaleString() }}đ
-                </span>
-              </div>
-              
-            </div>
+          <div class="search-bar-premium">
+             <span class="material-icons">search</span>
+             <input v-model="searchQuery" type="text" placeholder="Gõ tên truyện hoặc mã SKU để tìm thủ công..." />
           </div>
-        </div>
 
-        <!-- Right Section: Cart -->
-        <div class="cart-section">
-          <div class="cart-card">
-            <div class="cart-header">
-              <h3>{{ mode === 'sale' ? 'Giỏ hàng' : 'Phiếu thuê' }}</h3>
-              <span class="item-count">{{ cart.length }} món</span>
-            </div>
-
-            <div class="cart-items">
-              <div v-if="cart.length === 0" class="empty-cart">
-                <div class="empty-icon">🛒</div>
-                <p>Chưa có sản phẩm nào</p>
-              </div>
-              <div v-for="item in cart" :key="item.cartId" class="cart-item">
-                <img :src="item.image" class="item-thumb" />
-                <div class="item-details">
-                  <span class="item-name">{{ item.name }}</span>
-                  <span class="item-price">
-                    {{ mode === 'sale' ? item.price.toLocaleString() : item.rent_price.toLocaleString() }}đ
-                  </span>
+          <div class="product-grid-lux">
+             <div v-for="p in filteredProducts" :key="p.id" class="p-card-pos" @click="addToCart(p)">
+                <div class="p-image-box">
+                   <img :src="p.image" :alt="p.name" />
+                   <div class="p-sku">{{ p.code }}</div>
                 </div>
-                <button class="btn-remove" @click="removeFromCart(item.cartId)">✕</button>
-              </div>
-            </div>
-
-            <div class="cart-footer">
-              <div class="summary-line">
-                <span>Tạm tính:</span>
-                <span>{{ totalAmount.toLocaleString() }}đ</span>
-              </div>
-              <div class="summary-line total">
-                <span>Tổng cộng:</span>
-                <span>{{ totalAmount.toLocaleString() }}đ</span>
-              </div>
-              <button 
-                class="btn-checkout" 
-                :disabled="cart.length === 0"
-                @click="confirmTransaction"
-              >
-                Xác nhận {{ mode === 'sale' ? 'Thanh toán' : 'Cho thuê' }}
-              </button>
-            </div>
+                <div class="p-info-box">
+                   <span class="p-name">{{ p.name }}</span>
+                   <span class="p-price-pill">{{ formatCurrency(mode === 'sale' ? p.price : p.rent_price) }}</span>
+                </div>
+                <div class="p-add-overlay"><span class="material-icons">add_shopping_cart</span></div>
+             </div>
+             <div v-if="filteredProducts.length === 0" class="empty-search">
+                <span class="material-icons">find_in_page</span>
+                <p>Không tìm thấy sản phẩm nào khớp với từ khóa</p>
+             </div>
           </div>
         </div>
-      </div>
 
-      <!-- History Section -->
-      
+        <!-- Right Column: Cart (Mini) -->
+        <div class="cart-column">
+           <div class="cart-glass-card shadow-premium">
+              <div class="cart-top">
+                 <h3>🛒 Giỏ hàng tạm</h3>
+                 <span class="count-badge">{{ cart.length }}</span>
+              </div>
+
+              <div class="cart-list-mini">
+                 <div v-if="cart.length === 0" class="empty-mini">
+                    <p>Chưa chọn món nào</p>
+                 </div>
+                 <div v-for="item in cart" :key="item.cartId" class="mini-item">
+                    <div class="item-name-wrap">
+                       <span class="item-name">{{ item.name }}</span>
+                       <span class="item-price-small">{{ formatCurrency(mode === 'sale' ? item.price : item.rent_price) }}</span>
+                    </div>
+                    <button class="item-del" @click="removeFromCart(item.cartId)">✕</button>
+                 </div>
+              </div>
+
+              <div class="cart-bottom-pos">
+                 <div class="subtotal-row">
+                    <span>Tổng tiền</span>
+                    <span class="total-price-pos">{{ formatCurrency(subtotal) }}</span>
+                 </div>
+                 <button class="btn-checkout-forward" @click="handleConfirm">
+                    {{ mode === 'sale' ? 'XÁC NHẬN THANH TOÁN' : 'XÁC NHẬN CHO THUÊ' }}
+                    <span class="material-icons">arrow_forward</span>
+                 </button>
+              </div>
+           </div>
+        </div>
+      </div>
     </div>
   </DefaultLayout>
 </template>
 
 <style scoped>
-.sales-page {
-  padding: 24px;
-  background: #f1f5f9;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-}
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
-/* Header & Toggle */
-.main-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
+.pos-container { padding: 32px; background: #f8fafc; min-height: 100vh; font-family: 'Plus Jakarta Sans', sans-serif; }
+.pos-layout { display: grid; grid-template-columns: 1fr 340px; gap: 32px; align-items: start; }
 
-.title {
-  font-size: 1.5rem;
-  font-weight: 700;
-  color: #1e293b;
-  margin: 0;
-}
+/* Header & Mode */
+.header-lux-area { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 24px; }
+.header-lux-area h2 { font-size: 1.75rem; font-weight: 800; color: #0f172a; margin: 0; letter-spacing: -0.04em; }
+.header-lux-area p { color: #64748b; font-size: 0.9rem; margin-top: 4px; }
 
-.mode-toggle {
-  display: flex;
-  background: #e2e8f0;
-  padding: 4px;
-  border-radius: 12px;
-  gap: 4px;
-}
+.mode-pills { background: #e2e8f0; padding: 4px; border-radius: 12px; display: flex; gap: 4px; }
+.mode-pills button { padding: 8px 16px; border-radius: 8px; border: none; background: transparent; font-weight: 700; font-size: 0.75rem; color: #64748b; cursor: pointer; transition: 0.2s; }
+.mode-pills button.active { background: white; color: #2563eb; box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.1); }
 
-.mode-toggle button {
-  padding: 8px 16px;
-  border: none;
-  background: transparent;
-  border-radius: 8px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: 0.3s;
-  color: #64748b;
-}
+/* Search Bar */
+.search-bar-premium { position: relative; margin-bottom: 32px; }
+.search-bar-premium .material-icons { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: #94a3b8; }
+.search-bar-premium input { width: 100%; padding: 16px 16px 16px 52px; border-radius: 18px; border: 1.5px solid #f1f5f9; background: white; font-weight: 600; outline: none; transition: 0.3s; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02); }
+.search-bar-premium input:focus { border-color: #2563eb; box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.05); }
 
-.mode-toggle button.active {
-  background: white;
-  color: #2563eb;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-}
+/* Product Grid */
+.product-grid-lux { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 24px; }
+.p-card-pos { background: white; border-radius: 20px; padding: 12px; border: 1px solid #f1f5f9; cursor: pointer; position: relative; transition: 0.3s; overflow: hidden; }
+.p-card-pos:hover { transform: translateY(-5px); box-shadow: 0 15px 30px -10px rgba(0,0,0,0.05); border-color: #2563eb; }
 
-/* Main Content Layout */
-.sales-content {
-  display: grid;
-  grid-template-columns: 1fr 400px;
-  gap: 24px;
-  align-items: start;
-}
+.p-image-box { width: 100%; height: 220px; border-radius: 14px; overflow: hidden; position: relative; background: #f8fafc; }
+.p-image-box img { width: 100%; height: 100%; object-fit: cover; }
+.p-sku { position: absolute; top: 8px; left: 8px; background: rgba(15, 23, 42, 0.7); color: white; padding: 2px 8px; border-radius: 6px; font-size: 0.65rem; font-weight: 700; }
 
-/* Products Section */
-.products-section {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
+.p-info-box { margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
+.p-name { font-weight: 750; color: #1e293b; font-size: 0.9rem; line-height: 1.25; height: 2.5em; overflow: hidden; }
+.p-price-pill { color: #2563eb; font-weight: 800; font-size: 1rem; }
 
-.search-container {
-  position: relative;
-  width: 100%;
-}
+.p-add-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(37, 99, 235, 0.1); display: flex; align-items: center; justify-content: center; opacity: 0; transition: 0.2s; }
+.p-card-pos:hover .p-add-overlay { opacity: 1; }
+.p-add-overlay .material-icons { font-size: 32px; color: #2563eb; }
 
-.search-icon {
-  position: absolute;
-  left: 16px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #94a3b8;
-}
+/* Cart Column */
+.cart-glass-card { background: white; border-radius: 24px; padding: 24px; border: 1px solid #f1f5f9; min-height: 500px; display: flex; flex-direction: column; }
+.shadow-premium { box-shadow: 0 10px 15px -3px rgba(0,0,0,0.02); }
 
-.search-input {
-  width: 100%;
-  padding: 12px 12px 12px 48px;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  outline: none;
-  transition: 0.2s;
-  font-size: 0.95rem;
-}
+.cart-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+.cart-top h3 { font-size: 1.1rem; font-weight: 800; color: #1e293b; margin: 0; }
+.count-badge { background: #2563eb; color: white; padding: 2px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 800; }
 
-.search-input:focus {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-}
+.cart-list-mini { flex: 1; display: flex; flex-direction: column; gap: 12px; margin-bottom: 20px; overflow-y: auto; max-height: calc(100vh - 400px); }
+.mini-item { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: #f8fafc; border-radius: 12px; border: 1px solid #f1f5f9; }
+.item-name-wrap { display: flex; flex-direction: column; flex: 1; }
+.item-name { font-size: 0.8rem; font-weight: 700; color: #334155; line-height: 1.2; }
+.item-price-small { font-size: 0.75rem; font-weight: 700; color: #94a3b8; }
+.item-del { background: none; border: none; color: #cbd5e1; cursor: pointer; padding: 4px; font-size: 0.8rem; transition: 0.2s; }
+.item-del:hover { color: #ef4444; }
 
-.product-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 20px;
-}
+.empty-mini { text-align: center; color: #cbd5e1; padding-top: 40px; font-weight: 700; font-size: 0.85rem; }
 
-.product-card {
-  background: white;
-  border-radius: 16px;
-  overflow: hidden;
-  border: 1px solid #e2e8f0;
-  cursor: pointer;
-  position: relative;
-  transition: 0.3s;
-}
+/* Cart Bottom */
+.cart-bottom-pos { border-top: 1px dashed #e2e8f0; padding-top: 20px; }
+.subtotal-row { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 16px; }
+.subtotal-row span:first-child { font-size: 0.75rem; font-weight: 800; color: #94a3b8; text-transform: uppercase; }
+.total-price-pos { font-size: 1.5rem; font-weight: 900; color: #0f172a; }
 
-.product-card:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-}
+.btn-checkout-forward { width: 100%; padding: 16px; border-radius: 16px; border: none; background: #0f172a; color: white; font-weight: 800; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: 0.3s; box-shadow: 0 10px 15px -3px rgba(15, 23, 42, 0.2); }
+.btn-checkout-forward:hover { background: #2563eb; transform: translateY(-2px); box-shadow: 0 20px 25px -5px rgba(37, 99, 235, 0.3); }
 
-.image-wrapper {
-  position: relative;
-  width: 100%;
-  height: 200px;
-}
-
-.image-wrapper img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.stock-badge {
-  position: absolute;
-  bottom: 8px;
-  right: 8px;
-  background: rgba(0, 0, 0, 0.6);
-  color: white;
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 0.75rem;
-  backdrop-filter: blur(4px);
-}
-
-.product-info {
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.product-name {
-  font-weight: 600;
-  color: #334155;
-  font-size: 0.9rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.product-price {
-  color: #2563eb;
-  font-weight: 700;
-  font-size: 1rem;
-}
-
-.add-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-weight: 600;
-  opacity: 0;
-  transition: 0.2s;
-}
-
-.product-card:hover .add-overlay {
-  opacity: 1;
-}
-
-/* Cart Section */
-.cart-card {
-  background: white;
-  border-radius: 20px;
-  border: 1px solid #e2e8f0;
-  display: flex;
-  flex-direction: column;
-  min-height: 600px;
-  max-height: calc(100vh - 200px);
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-}
-
-.cart-header {
-  padding: 24px;
-  border-bottom: 1px solid #f1f5f9;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.cart-header h3 {
-  margin: 0;
-  font-size: 1.1rem;
-  font-weight: 700;
-}
-
-.item-count {
-  background: #eff6ff;
-  color: #2563eb;
-  padding: 4px 10px;
-  border-radius: 8px;
-  font-size: 0.8rem;
-  font-weight: 600;
-}
-
-.cart-items {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.empty-cart {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  color: #94a3b8;
-  height: 100%;
-}
-
-.empty-icon {
-  font-size: 3rem;
-  margin-bottom: 12px;
-}
-
-.cart-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px;
-  background: #f8fafc;
-  border-radius: 12px;
-}
-
-.item-thumb {
-  width: 48px;
-  height: 64px;
-  object-fit: cover;
-  border-radius: 6px;
-}
-
-.item-details {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-.item-name {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #1e293b;
-}
-
-.item-price {
-  font-size: 0.85rem;
-  font-weight: 500;
-  color: #64748b;
-}
-
-.btn-remove {
-  background: none;
-  border: none;
-  color: #94a3b8;
-  cursor: pointer;
-  padding: 8px;
-  transition: 0.2s;
-}
-
-.btn-remove:hover {
-  color: #ef4444;
-}
-
-.cart-footer {
-  padding: 24px;
-  border-top: 1px solid #f1f5f9;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.summary-line {
-  display: flex;
-  justify-content: space-between;
-  font-size: 0.9rem;
-  color: #64748b;
-}
-
-.summary-line.total {
-  font-size: 1.2rem;
-  font-weight: 800;
-  color: #1e293b;
-  margin: 4px 0;
-}
-
-.btn-checkout {
-  background: #2563eb;
-  color: white;
-  border: none;
-  padding: 16px;
-  border-radius: 12px;
-  font-weight: 700;
-  font-size: 1rem;
-  cursor: pointer;
-  transition: 0.3s;
-}
-
-.btn-checkout:hover:not(:disabled) {
-  background: #1d4ed8;
-  transform: translateY(-2px);
-}
-
-.btn-checkout:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* History Section */
-.history-section {
-  width: 100%;
-}
-
-.history-card {
-  background: white;
-  border-radius: 20px;
-  border: 1px solid #e2e8f0;
-  padding: 24px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-}
-
-.history-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 16px;
-}
-
-.history-table th {
-  text-align: left;
-  padding: 12px;
-  background: #f8fafc;
-  color: #64748b;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 600;
-}
-
-.history-table td {
-  padding: 16px 12px;
-  border-bottom: 1px solid #f1f5f9;
-  font-size: 0.9rem;
-  color: #334155;
-}
-
-.order-id {
-  font-weight: 700;
-  color: #2563eb;
-}
-
-.type-badge {
-  padding: 4px 10px;
-  border-radius: 20px;
-  font-size: 0.75rem;
-  font-weight: 600;
-}
-
-.type-badge.sale { background: #dcfce7; color: #166534; }
-.type-badge.rental { background: #fef9c3; color: #854d0e; }
-
-.items-cell {
-  max-width: 300px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: #64748b;
-}
-
-.text-right { text-align: right; }
-.total-cell { font-weight: 700; color: #1e293b; }
-.date-cell { color: #94a3b8; font-size: 0.85rem; }
+.empty-search { text-align: center; padding: 60px; color: #cbd5e1; grid-column: 1 / -1; }
+.empty-search .material-icons { font-size: 4rem; opacity: 0.2; }
 </style>
