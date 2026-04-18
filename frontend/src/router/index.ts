@@ -15,22 +15,7 @@ const routes = [
     {
         path: '/ban-hang',
         name: 'QuickSale',
-        component: () => import('../views/sale.vue'),
-    },
-    {
-        path: '/phieu-thue',
-        name: 'QuickRental',
-        component: () => import('../views/sale.vue'),
-    },
-    {
-        path: '/order-sale',
-        name: 'OrderSale',
-        component: () => import('../views/order-sale.vue'),
-    },
-    {
-        path: '/rentalorder',
-        name: 'RentalOrder',
-        component: () => import('../views/rentalorder.vue'),
+        component: () => import('../views/checkout.vue'),
     },
     {
         path: '/khuyen-mai',
@@ -38,9 +23,14 @@ const routes = [
         component: () => import('../views/Promotion.vue'),
     },
     {
+        path: '/hoan-tra',
+        name: 'RentalReturnInspection',
+        component: () => import('../views/rental-return-inspection.vue'),
+    },
+    {
         path: '/kho',
         name: 'Inventory',
-        component: () => import('../views/manager_title.vue'),
+        component: () => import('../views/inventory.vue'),
     },
     {
         path: '/khach-hang',

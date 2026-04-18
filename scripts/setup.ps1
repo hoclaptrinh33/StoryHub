@@ -26,6 +26,18 @@ if ((Test-Path ".env.example") -and (-not (Test-Path ".env"))) {
     Copy-Item ".env.example" ".env"
 }
 
+Write-Host "[StoryHub] Khoi tao schema backend..."
+& $python scripts/migrate.py up
+if ($LASTEXITCODE -ne 0) {
+    throw "Khong the khoi tao schema backend bang migration."
+}
+
+Write-Host "[StoryHub] Seed du lieu mau backend..."
+& $python scripts/seed.py
+if ($LASTEXITCODE -ne 0) {
+    throw "Khong the seed du lieu mau backend."
+}
+
 Write-Host "[StoryHub] Cai dependency frontend..."
 Set-Location (Join-Path $root "frontend")
 npm install

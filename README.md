@@ -60,8 +60,20 @@ Script setup sẽ:
 
 - Tạo/cập nhật môi trường Python `.venv`.
 - Cài dependency backend trong `backend/`.
+- Khởi tạo schema backend bằng migration script.
+- Seed dữ liệu mẫu backend theo cơ chế idempotent.
 - Cài dependency frontend trong `frontend/`.
 - Tạo `.env` từ `.env.example` nếu chưa có.
+
+Nếu cần thao tác thủ công với migration/seed:
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe scripts/migrate.py status
+..\.venv\Scripts\python.exe scripts/migrate.py up
+..\.venv\Scripts\python.exe scripts/seed.py
+..\.venv\Scripts\python.exe scripts/migrate.py down
+```
 
 ## 5) Chạy hệ thống ở môi trường local
 

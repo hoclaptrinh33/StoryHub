@@ -1,0 +1,24 @@
+drop index if exists idx_audit_log_created_at;
+drop index if exists idx_audit_log_entity;
+drop index if exists idx_reservation_expire_at;
+drop index if exists idx_reservation_item_status;
+drop index if exists idx_pos_order_created_at;
+drop index if exists idx_rental_contract_status;
+drop index if exists idx_item_volume_id;
+drop index if exists idx_item_reservation_expire;
+drop index if exists idx_item_status;
+
+drop table if exists audit_log;
+drop table if exists backup_job;
+drop table if exists metadata_cache;
+drop table if exists rental_settlement;
+drop table if exists rental_item;
+drop table if exists rental_contract;
+drop table if exists pos_payment;
+drop table if exists pos_order_item;
+drop table if exists pos_order;
+drop table if exists reservation;
+drop table if exists item;
+drop table if exists customer;
+drop table if exists volume;
+drop table if exists title;

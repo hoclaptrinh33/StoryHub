@@ -5,17 +5,48 @@ backend/.venv/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+*.egg-info/
+dist/
+build/
 
+# Database
+*.db
+*.sqlite
+*.sqlite3
 
-
+# Logs
+*.log
+pytest-error.log
 
 # Environment
 .env
 .env.*
+.env.local
+.env.*.local
+
+# Agent
+.agent/
 
 # IDE and OS
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Tauri / Rust build output
+frontend/src-tauri/target/
+frontend/src-tauri/Cargo.lock
+Cargo.lock
+
+# Generated
+frontend/src-tauri/gen/
 
 # Bỏ qua file database local
 *.db

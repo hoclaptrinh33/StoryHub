@@ -28,6 +28,7 @@ Schema ưu tiên:
 - `title_id` (FK -> title.id)
 - `volume_number`
 - `isbn` (nullable)
+- `retail_stock` (Số lượng tồn kho bán lẻ trực tiếp - default 0)
 - `created_at`, `updated_at`, `deleted_at`
 
 Ràng buộc:
@@ -39,7 +40,7 @@ Ràng buộc:
 - `id` (PK, SKU/barcode)
 - `volume_id` (FK -> volume.id)
 - `condition_level` (100, 80, ...)
-- `status` (`available|reserved|rented|sold|lost|maintenance`)
+- `status` (`available|reserved|rented|lost|maintenance` - Bỏ trạng thái `sold`, bảng này chỉ dành riêng lưu Physical Rental Item)
 - `health_percent`
 - `notes`
 - `reserved_by_customer_id` (nullable)

@@ -15,6 +15,19 @@ Mac dinh frontend goi backend qua bien moi truong:
 
 Co the tao file `.env` tu `.env.example` neu can doi endpoint API.
 
+## Kiem tra chat luong
+
+```bash
+npm run lint
+npm run format:check
+```
+
+Can format lai file frontend:
+
+```bash
+npm run format
+```
+
 ## Chay Tauri desktop
 
 ```bash

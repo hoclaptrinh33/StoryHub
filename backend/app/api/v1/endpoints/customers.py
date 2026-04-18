@@ -1,0 +1,351 @@
+from __future__ import annotations
+
+import re
+from typing import Literal
+
+from fastapi import APIRouter, Depends, Path, Request
+from pydantic import BaseModel, Field
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette import status
+
+from app.api.v1.dependencies import AuthContext, get_auth_context
+from app.api.v1.endpoints._common import get_request_meta
+from app.api.v1.schemas import ResponseEnvelope, success_response
+from app.core.errors import AppError
+from app.db.session import get_db_session
+from app.services import get_cached_response, store_cached_response, write_audit_log
+
+router = APIRouter(prefix="/customers", tags=["crm"])
+
+_PHONE_PATTERN = re.compile(r"^[0-9]{9,15}$")
+
+
+class UpsertCustomerRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    membership_level: Literal["standard", "silver", "gold", "vip", "regular"]
+    address: str | None = None
+    deposit_delta: int = 0
+    debt_delta: int = 0
+    blacklist_flag: bool | None = None
+    request_id: str = Field(min_length=6, max_length=128)
+    phone: str | None = None
+
+
+class UpsertCustomerPayload(BaseModel):
+    customer_id: str
+    phone: str
+    name: str
+    membership_level: str
+    deposit_balance: int
+    debt: int
+    blacklist_flag: bool
+    updated_at: str
+
+
+class CustomerListItem(BaseModel):
+    id: int
+    name: str
+    phone: str
+    membership_level: str
+    deposit_balance: int
+    debt: int
+    blacklist_flag: bool
+
+
+def _ensure_phone_valid(phone: str) -> None:
+    if not _PHONE_PATTERN.match(phone):
+        raise AppError(
+            code="INVALID_PHONE",
+            message="So dien thoai khong dung dinh dang hop le.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+@router.get("/", response_model=ResponseEnvelope[list[CustomerListItem]])
+async def list_customers(
+    q: str | None = None,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[list[CustomerListItem]]:
+    auth.require_role("cashier", "manager")
+    auth.require_scope("crm:read")
+
+    query_str = """
+        SELECT
+            id,
+            name,
+            phone,
+            membership_level,
+            deposit_balance,
+            debt,
+            blacklist_flag
+        FROM customer
+        WHERE deleted_at IS NULL
+    """
+    params: dict[str, object] = {}
+
+    if q:
+        query_str += " AND (name LIKE :q OR phone LIKE :q)"
+        params["q"] = f"%{q}%"
+
+    query_str += " ORDER BY name ASC LIMIT 100"
+
+    result = await session.execute(text(query_str), params)
+    rows = result.mappings().all()
+
+    customers = [
+        CustomerListItem(
+            id=row["id"],
+            name=row["name"],
+            phone=row["phone"],
+            membership_level=row["membership_level"],
+            deposit_balance=row["deposit_balance"],
+            debt=row["debt"],
+            blacklist_flag=bool(row["blacklist_flag"]),
+        )
+        for row in rows
+    ]
+
+    return success_response(customers)
+
+
+@router.put("/{phone}", response_model=ResponseEnvelope[UpsertCustomerPayload])
+async def upsert_customer_profile(
+    payload: UpsertCustomerRequest,
+    request: Request,
+    phone: str = Path(min_length=9, max_length=15),
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[UpsertCustomerPayload] | dict[str, object]:
+    auth.require_role("cashier", "manager")
+    auth.require_scope("crm:write")
+
+    if payload.phone is not None and payload.phone != phone:
+        raise AppError(
+            code="INVALID_PHONE",
+            message="So dien thoai trong body khong khop voi duong dan.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    _ensure_phone_valid(phone)
+
+    cached = await get_cached_response(
+        session,
+        scope="crm.upsert",
+        request_id=payload.request_id,
+    )
+    if cached is not None:
+        return cached.payload
+    if session.in_transaction():
+        await session.rollback()
+
+    async with session.begin():
+        existing_result = await session.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    name,
+                    phone,
+                    address,
+                    membership_level,
+                    deposit_balance,
+                    debt,
+                    blacklist_flag,
+                    updated_at
+                FROM customer
+                WHERE phone = :phone AND deleted_at IS NULL;
+                """
+            ),
+            {"phone": phone},
+        )
+        existing_row = existing_result.mappings().first()
+
+        before_payload = dict(existing_row) if existing_row is not None else None
+
+        if existing_row is None:
+            if payload.deposit_delta < 0 or payload.debt_delta < 0:
+                raise AppError(
+                    code="NEGATIVE_BALANCE_NOT_ALLOWED",
+                    message="Khong the tao khach moi voi so du coc hoac cong no am.",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+
+            blacklist_flag = (
+                bool(payload.blacklist_flag) if payload.blacklist_flag is not None else False
+            )
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO customer (
+                        name,
+                        phone,
+                        address,
+                        membership_level,
+                        deposit_balance,
+                        debt,
+                        blacklist_flag,
+                        created_at,
+                        updated_at,
+                        deleted_at
+                    )
+                    VALUES (
+                        :name,
+                        :phone,
+                        :address,
+                        :membership_level,
+                        :deposit_balance,
+                        :debt,
+                        :blacklist_flag,
+                        CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP,
+                        NULL
+                    );
+                    """
+                ),
+                {
+                    "name": payload.name,
+                    "phone": phone,
+                    "address": payload.address,
+                    "membership_level": payload.membership_level,
+                    "deposit_balance": payload.deposit_delta,
+                    "debt": payload.debt_delta,
+                    "blacklist_flag": 1 if blacklist_flag else 0,
+                },
+            )
+            customer_id_result = await session.execute(text("SELECT last_insert_rowid() AS value;"))
+            customer_id = int(customer_id_result.scalar_one())
+        else:
+            if int(existing_row["blacklist_flag"]) == 1 and auth.role != "manager":
+                sensitive_mutation = (
+                    payload.deposit_delta != 0
+                    or payload.debt_delta != 0
+                    or payload.blacklist_flag is False
+                    or payload.membership_level != existing_row["membership_level"]
+                )
+                if sensitive_mutation:
+                    raise AppError(
+                        code="BLACKLISTED_CUSTOMER_MUTATION_DENIED",
+                        message="Khong duoc cap nhat truong nhay cam cho khach blacklist.",
+                        status_code=status.HTTP_403_FORBIDDEN,
+                    )
+
+            if (
+                int(existing_row["blacklist_flag"]) == 1
+                and payload.blacklist_flag is False
+                and auth.role != "manager"
+            ):
+                raise AppError(
+                    code="BLACKLISTED_CUSTOMER_MUTATION_DENIED",
+                    message="Chi manager moi co the go blacklist cho khach hang.",
+                    status_code=status.HTTP_403_FORBIDDEN,
+                )
+
+            new_deposit = int(existing_row["deposit_balance"]) + payload.deposit_delta
+            new_debt = int(existing_row["debt"]) + payload.debt_delta
+            if new_deposit < 0 or new_debt < 0:
+                raise AppError(
+                    code="NEGATIVE_BALANCE_NOT_ALLOWED",
+                    message="So du coc hoac cong no sau cap nhat khong hop le.",
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                )
+
+            next_blacklist_flag = (
+                int(existing_row["blacklist_flag"])
+                if payload.blacklist_flag is None
+                else int(payload.blacklist_flag)
+            )
+
+            await session.execute(
+                text(
+                    """
+                    UPDATE customer
+                    SET
+                        name = :name,
+                        address = :address,
+                        membership_level = :membership_level,
+                        deposit_balance = :deposit_balance,
+                        debt = :debt,
+                        blacklist_flag = :blacklist_flag,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = :customer_id;
+                    """
+                ),
+                {
+                    "name": payload.name,
+                    "address": payload.address,
+                    "membership_level": payload.membership_level,
+                    "deposit_balance": new_deposit,
+                    "debt": new_debt,
+                    "blacklist_flag": next_blacklist_flag,
+                    "customer_id": int(existing_row["id"]),
+                },
+            )
+            customer_id = int(existing_row["id"])
+
+        updated_result = await session.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    phone,
+                    name,
+                    membership_level,
+                    deposit_balance,
+                    debt,
+                    blacklist_flag,
+                    updated_at
+                FROM customer
+                WHERE id = :customer_id;
+                """
+            ),
+            {"customer_id": customer_id},
+        )
+        updated_row = updated_result.mappings().one()
+
+        ip_address, device_id = get_request_meta(request)
+        await write_audit_log(
+            session,
+            actor_user_id=auth.user_id,
+            action="CUSTOMER_UPSERTED",
+            entity_type="customer",
+            entity_id=str(customer_id),
+            before=before_payload,
+            after=dict(updated_row),
+            ip_address=ip_address,
+            device_id=device_id,
+        )
+
+    envelope = success_response(
+        UpsertCustomerPayload(
+            customer_id=str(customer_id),
+            phone=str(updated_row["phone"]),
+            name=str(updated_row["name"]),
+            membership_level=str(updated_row["membership_level"]),
+            deposit_balance=int(updated_row["deposit_balance"]),
+            debt=int(updated_row["debt"]),
+            blacklist_flag=bool(updated_row["blacklist_flag"]),
+            updated_at=str(updated_row["updated_at"]),
+        )
+    )
+
+    try:
+        async with session.begin():
+            await store_cached_response(
+                session,
+                scope="crm.upsert",
+                request_id=payload.request_id,
+                status_code=status.HTTP_200_OK,
+                payload=envelope.model_dump(),
+            )
+    except IntegrityError:
+        await session.rollback()
+        cached = await get_cached_response(
+            session, scope="crm.upsert", request_id=payload.request_id
+        )
+        if cached is not None:
+            return cached.payload
+        raise
+
+    return envelope

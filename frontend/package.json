@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc -b && vite build",
+    "type-check": "vue-tsc -b --noEmit",
+    "lint": "npm run type-check",
+    "format": "prettier --write \"src/**/*.{ts,vue,css}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,vue,css}\"",
+    "build": "npm run type-check && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
@@ -24,6 +28,7 @@
     "@types/node": "^24.12.2",
     "@vitejs/plugin-vue": "^6.0.5",
     "@vue/tsconfig": "^0.9.1",
+    "prettier": "^3.6.2",
     "typescript": "~6.0.2",
     "vite": "^8.0.4",
     "vue-tsc": "^3.2.6"

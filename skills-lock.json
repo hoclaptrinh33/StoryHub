@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "skills": {
+    "api-docs-generator": {
+      "source": "patricio0312rev/skills",
+      "sourceType": "github",
+      "computedHash": "38131740c309bbcd98e1b3e5e600aff0883d81e2c44efc0956db78e31dc98762"
+    },
+    "docker-compose-orchestration": {
+      "source": "manutej/luxor-claude-marketplace",
+      "sourceType": "github",
+      "computedHash": "01831d0723a2ac491e233bd9bfdffdac8c0ae5500f140a3ca0382ac5f4a26159"
+    },
+    "fastapi-python": {
+      "source": "mindrally/skills",
+      "sourceType": "github",
+      "computedHash": "4521c6090735152b7b8df670cefe5c1c6d1dcaa115de67bb96e74ebf802d4f24"
+    },
+    "playwright-best-practices": {
+      "source": "currents-dev/playwright-best-practices-skill",
+      "sourceType": "github",
+      "computedHash": "6db654e753257e642d6507d59b4fc633a2382e93429748ba0fb6817c23ef5216"
+    },
+    "supabase-postgres-best-practices": {
+      "source": "supabase/agent-skills",
+      "sourceType": "github",
+      "computedHash": "8e41c7417894e6f394614ee7ca3ee5322b1e58d890255d441f42dea98732597f"
+    },
+    "tauri-v2": {
+      "source": "nodnarbnitram/claude-code-extensions",
+      "sourceType": "github",
+      "computedHash": "7108944eec3bef17686df9ebae9c9bdbee7809744930c8734c979e3c4573eaab"
+    },
+    "vue-best-practices": {
+      "source": "hyf0/vue-skills",
+      "sourceType": "github",
+      "computedHash": "21132f6c11c765bd11d0d6ad081122dd858630073e2123b651e58f17b399b131"
+    }
+  }
+}

@@ -9,6 +9,7 @@
       <router-link to="/">TRANG CHỦ</router-link>
       <router-link to="/quan-ly">QUẢN LÝ</router-link>
       <router-link to="/ban-hang">BÁN HÀNG & CHO THUÊ</router-link>
+      <router-link to="/hoan-tra">KIỂM ĐỊNH TRẢ</router-link>
       <router-link to="/khuyen-mai">KHUYẾN MÃI</router-link>
       <router-link to="/kho">KHO</router-link>
       <router-link to="/bao-cao">BÁO CÁO</router-link>

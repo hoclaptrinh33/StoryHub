@@ -282,7 +282,7 @@ const updateCharts = () => {
   charts = [];
 
   // Common font config
-  const fontConfig = { family: "'Plus Jakarta Sans', sans-serif", weight: '600' };
+  const fontConfig = { family: "'Plus Jakarta Sans', sans-serif", weight: 600 };
 
   // 1. Line Chart: Revenue
   if (revenueChartRef.value) {
@@ -373,12 +373,12 @@ const updateCharts = () => {
         datasets: [{
           data: [78000000, 52000000, 34000000, 18000000],
           backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444'],
-          borderWidth: 0,
-          cutout: '70%'
+          borderWidth: 0
         }]
       },
       options: {
         responsive: true,
+        cutout: '70%',
         plugins: { 
           legend: { position: 'bottom', labels: { font: fontConfig, usePointStyle: true, pointStyle: 'circle' } } 
         }
