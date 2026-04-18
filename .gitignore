@@ -17,4 +17,5 @@ backend/.venv/
 .DS_Store
 Thumbs.db
 
-
+# Bỏ qua file database local
+*.db
