@@ -6,6 +6,55 @@
 
 ---
 
+## ✨ Chức năng Cơ bản (Core Features)
+
+StoryHub cung cấp đầy đủ các chức năng cơ sở để vận hành một hệ thống bán lẻ và cho thuê sách/truyện:
+
+### 🔍 Tìm kiếm & Duyệt sản phẩm
+- **Tìm kiếm đa chiều:** Theo tên sách, tác giả, thể loại, ISBN hoặc mã SKU.
+- **Bộ lọc nâng cao:** Lọc theo tình trạng kho (Còn hàng, Hết hàng), loại sản phẩm (Bán lẻ/Cho thuê).
+- **Xem chi tiết sản phẩm:** Ảnh bìa, mô tả, giá bán, giá thuê, số lượng tồn kho, tình trạng từng cuốn.
+- **Gợi ý tự động:** Sản phẩm liên quan, bảng xếp hạng hot, sách mới nhất.
+
+### 👥 Quản lý khách hàng
+- **Tra cứu khách hàng:** Tìm kiếm theo tên, số điện thoại, email hoặc ID khách hàng.
+- **Hồ sơ khách hàng:** Thông tin cá nhân, lịch sử giao dịch, các sách đang thuê, tổng chi tiêu.
+- **Tạo hợp đồng thuê:** Nhập thông tin khách hàng, chọn thời hạn thuê, tự động tính tiền cọc.
+- **Quản lý thanh toán:** Theo dõi công nợ, tiền cọc, các khoản phạt quá hạn.
+
+### 🛒 Giỏ hàng & Thanh toán
+- **Thêm/Xóa sản phẩm:** Thêm sách vào giỏ bằng quét mã hoặc tìm kiếm, xóa nhanh bằng phím.
+- **Điều chỉnh số lượng:** Tăng/giảm số lượng từng mục hàng.
+- **Tính toán tự động:** Cộng tiền hàng, chiết khấu, phí, tổng thanh toán.
+- **Thanh toán đa hình thức:** Tiền mặt, thẻ tín dụng, QR Code (Momo, ZaloPay, VNPay), ví điện tử.
+- **Hóa đơn & Biên lai:** In hóa đơn điện tử với QR Code, gửi qua email.
+
+### 📋 Quản lý hợp đồng & Lịch sử
+- **Danh sách hợp đồng:** Xem tất cả hợp đồng cho thuê hiện tại và quá khứ.
+- **Chi tiết hợp đồng:** Khách hàng, các cuốn sách thuê, ngày bắt đầu/kết thúc, tiền cọc, phí thuê.
+- **Lịch sử giao dịch:** Tìm kiếm lịch sử bán hàng, cho thuê, hoàn trả theo ngày/khách hàng/sản phẩm.
+- **Xuất báo cáo:** Xuất file CSV/PDF cho phân tích.
+
+### 💳 Phương thức thanh toán & Tài chính
+- **Quản lý tiền cọc:** Theo dõi tiền cọc, hoàn cọc khi trả sách, khấu trừ phí hư hỏng.
+- **Chiết khấu & Khuyến mãi:** Áp dụng mã giảm giá, chiết khấu theo khách hàng VIP.
+- **Theo dõi thanh toán:** Danh sách các giao dịch chưa thanh toán, ghi nợ.
+- **Hoàn tiền:** Xử lý hoàn tiền khi khách hủy đơn hàng.
+
+### 📦 Quản lý kho cơ bản
+- **Kiểm kê tồn kho:** Xem số lượng từng sách, số lượng đang cho thuê.
+- **Cập nhật tình trạng:** Đánh dấu sách hư hỏng, thất lạc, cần bảo trì.
+- **Thêm sách mới:** Nhập thông tin sách, tạo mã SKU, cập nhật giá.
+- **Báo cáo kho:** Sách sắp hết, sách bất động, giá trị tồn kho.
+
+### 🔐 Quản lý người dùng & Bảo mật
+- **Tài khoản đăng nhập:** Đăng nhập an toàn bằng mật khẩu.
+- **Phân quyền:** Thu ngân chỉ có quyền bán/thuê, quản lý có thể xem báo cáo, chỉnh sửa giá.
+- **Ghi nhật ký hoạt động:** Theo dõi ai đã xóa/sửa gì, khi nào.
+- **Khôi phục dữ liệu:** Backup/restore toàn bộ cơ sở dữ liệu.
+
+---
+
 ## 🏆 Tính năng Ưu việt (Superior Operations)
 
 ### ⚡ Quy trình Zero-Friction (Thanh toán 1-chạm)
