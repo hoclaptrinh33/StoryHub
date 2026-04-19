@@ -28,12 +28,38 @@ Schema ưu tiên:
 - `title_id` (FK -> title.id)
 - `volume_number`
 - `isbn` (nullable)
+- `p_sell_new` (Giá niêm yết bán mới, là giá gốc duy nhất của volume)
 - `retail_stock` (Số lượng tồn kho bán lẻ trực tiếp - default 0)
 - `created_at`, `updated_at`, `deleted_at`
 
 Ràng buộc:
 
 - unique (`title_id`, `volume_number`)
+
+### price_rule
+
+- `id` (PK)
+- `rule_code` (unique, ví dụ `k_rent_default`, `k_deposit_default`, `used_cap`)
+- `rule_group` (`rent|deposit|used_sale|override_policy`)
+- `scope_type` (`global|genre|title|volume|condition_level`)
+- `scope_ref_id` (nullable, id theo scope_type)
+- `value`
+- `value_type` (`ratio|amount|percent`)
+- `status` (`draft|active|archived`)
+- `valid_from`
+- `valid_to` (nullable)
+- `version_no`
+- `created_by_user_id`
+- `approved_by_user_id` (nullable)
+- `approved_at` (nullable)
+- `note`
+- `created_at`, `updated_at`, `deleted_at`
+
+Index đề xuất:
+
+- `idx_price_rule_group_status`
+- `idx_price_rule_scope`
+- `idx_price_rule_valid_window`
 
 ### item
 
@@ -93,12 +119,45 @@ Index đề xuất:
 - `created_by_user_id`
 - `created_at`, `updated_at`, `deleted_at`
 
+### order_item
+
+- `id` (PK)
+- `source_type` (`pos_sale|rental_contract|used_sale`)
+- `source_id` (order_id hoặc contract_id)
+- `item_id` (FK -> item.id)
+- `volume_id` (FK -> volume.id)
+- `price_rule_version` (version rule dùng để tính tại thời điểm giao dịch)
+- `p_sell_new_snapshot`
+- `final_sell_price` (nullable)
+- `final_rent_price` (nullable)
+- `final_deposit` (nullable)
+- `used_sale_price` (nullable)
+- `price_override_flag` (default false)
+- `override_reason_code` (nullable)
+- `override_note` (nullable)
+- `override_actor_user_id` (nullable)
+- `override_approved_by_user_id` (nullable)
+- `created_at`
+
+Ghi chú:
+
+- Đây là lớp snapshot giá chuẩn cho mọi giao dịch bán, thuê, cọc, bán truyện cũ.
+- Snapshot phải lưu cứng theo thời điểm tạo giao dịch để báo cáo lịch sử không lệch khi rule đổi.
+
+Index đề xuất:
+
+- `idx_order_item_source`
+- `idx_order_item_item_id`
+- `idx_order_item_rule_version`
+- `idx_order_item_override_flag`
+
 ### pos_order_item
 
 - `id` (PK)
 - `order_id` (FK -> pos_order.id)
+- `order_item_id` (FK -> order_item.id)
 - `item_id` (FK -> item.id)
-- `final_sell_price`
+- `final_sell_price` (mirror từ order_item.final_sell_price)
 - `quantity` (default 1)
 - `line_total`
 
@@ -128,9 +187,10 @@ Index đề xuất:
 
 - `id` (PK)
 - `contract_id` (FK -> rental_contract.id)
+- `order_item_id` (FK -> order_item.id)
 - `item_id` (FK -> item.id)
-- `final_rent_price`
-- `final_deposit`
+- `final_rent_price` (mirror từ order_item.final_rent_price)
+- `final_deposit` (mirror từ order_item.final_deposit)
 - `status` (`rented|returned|lost`)
 - `condition_before`
 - `condition_after` (nullable)
@@ -190,6 +250,10 @@ Index đề xuất:
 - Mọi thao tác đổi trạng thái item phải ghi audit log
 - Reservation expiry cần kiểm tra real-time mỗi lần query item
 - Cron cleanup chỉ là lớp dọn dẹp phụ trợ
+- `volume` chỉ giữ giá gốc `p_sell_new`, không lưu cứng rent/deposit/used price tại đây
+- Rent, deposit, used sale phải tính từ `price_rule` đang active và lưu snapshot vào `order_item`
+- Thay đổi rule chỉ áp dụng giao dịch mới, không hồi tố snapshot đã chốt
+- Nếu có override giá tại quầy, bắt buộc lưu `override_reason_code` và actor phê duyệt
 
 ## 4) Gợi ý migration về sau
 

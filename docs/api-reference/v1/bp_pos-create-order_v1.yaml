@@ -41,6 +41,22 @@ parameters:
       items:
         type: object
       description: Danh sách phương thức thanh toán và số tiền tương ứng.
+    checkout_override:
+      type: object
+      description: Override giá tại quầy, chỉ hợp lệ khi có manager approval token.
+      properties:
+        new_grand_total:
+          type: number
+          description: Tổng tiền mới sau override.
+        reason_code:
+          type: string
+          description: Mã lý do override bắt buộc theo policy.
+        reason_note:
+          type: string
+          description: Ghi chú chi tiết cho override (tùy chọn).
+        manager_approval_token:
+          type: string
+          description: Token xác thực manager từ quét thẻ hoặc nhập PIN.
     note:
       type: string
       description: Ghi chú đơn hàng.
@@ -62,6 +78,12 @@ returns:
       type: number
     grand_total:
       type: number
+    price_rule_version:
+      type: integer
+    price_override_applied:
+      type: boolean
+    override_reason_code:
+      type: string
     payment_breakdown:
       type: array
       items:
@@ -85,6 +107,12 @@ behavior:
     - condition: tổng split_payments == grand_total sau discount
       check_via: local_payment_validator
       error_if_false: SPLIT_PAYMENT_MISMATCH
+    - condition: nếu có checkout_override thì manager_approval_token phải hợp lệ
+      check_via: manager_override_approval
+      error_if_false: MANAGER_APPROVAL_REQUIRED
+    - condition: nếu có checkout_override thì reason_code không được rỗng
+      check_via: override_reason_validator
+      error_if_false: OVERRIDE_REASON_REQUIRED
   postconditions:
     - effect: order.status = 'paid'
       verifiable: true
@@ -93,8 +121,9 @@ behavior:
       verifiable: true
       verify_via: inventory_items_batch_lookup
   side_effect_scope:
-    reads: [item, pricing_policy, discount_policy]
-    writes: [pos_order, pos_order_item, pos_payment, item, audit_log]
+    reads: [item, pricing_policy, discount_policy, price_rule]
+    writes:
+      [pos_order, order_item, pos_order_item, pos_payment, item, audit_log]
     external: [receipt_printer]
   failure_strategy:
     ORDER_LOCK_CONFLICT:
@@ -116,6 +145,24 @@ behavior:
       backoff: fixed
       backoff_base_ms: 0
       alert: false
+    MANAGER_APPROVAL_REQUIRED:
+      action: abort
+      max_retries: 0
+      backoff: fixed
+      backoff_base_ms: 0
+      alert: false
+    OVERRIDE_REASON_REQUIRED:
+      action: abort
+      max_retries: 0
+      backoff: fixed
+      backoff_base_ms: 0
+      alert: false
+    OVERRIDE_BELOW_FLOOR:
+      action: abort
+      max_retries: 0
+      backoff: fixed
+      backoff_base_ms: 0
+      alert: true
   frontend:
     loading_strategy: overlay
     error_surface: inline
@@ -141,6 +188,18 @@ errors:
     type: LockTimeoutError
     http_status: 423
     description: Không lấy được lock cho toàn bộ item trong đơn.
+  - code: MANAGER_APPROVAL_REQUIRED
+    type: AuthorizationError
+    http_status: 403
+    description: Override tại quầy yêu cầu xác thực manager hợp lệ.
+  - code: OVERRIDE_REASON_REQUIRED
+    type: ValidationError
+    http_status: 400
+    description: Override tại quầy bắt buộc có reason_code.
+  - code: OVERRIDE_BELOW_FLOOR
+    type: PolicyError
+    http_status: 400
+    description: Giá override thấp hơn mức tối thiểu cho phép theo policy.
 
 auth:
   required: true
@@ -153,15 +212,23 @@ auth:
       condition: user.branch_id == resource.branch_id
       fields_allowed:
         [item_ids, discount_type, discount_value, split_payments, request_id]
-      fields_denied: [price_override]
+      fields_denied: [checkout_override]
     - role: manager
       access: full
       condition: ""
-      fields_allowed: []
+      fields_allowed:
+        [
+          item_ids,
+          discount_type,
+          discount_value,
+          split_payments,
+          checkout_override,
+          request_id,
+        ]
       fields_denied: []
   frontend_auth:
     hide_actions: [button_refund_order]
-    disable_actions: [input_price_override]
+    disable_actions: [input_price_override, select_override_reason]
     route_guard:
       min_role: cashier
       redirect_to: /403
@@ -193,6 +260,8 @@ dependencies:
       mandatory: false
       provides_data: audit_record
   conditional:
+    - tool: managerOverrideApproval
+      condition: request has checkout_override
     - tool: sendReceiptNotification
       condition: split_payments contains bank_transfer OR e_wallet
   fallback:
@@ -210,7 +279,8 @@ blueprint_tracking:
   assumptions:
     - Một item vật lý chỉ xuất hiện tối đa một lần trong đơn bán.
     - Trạng thái item chuyển sang sold ngay khi thanh toán thành công.
-    - Snapshot giá là bắt buộc cho mọi line item.
+    - Snapshot giá là bắt buộc cho mọi line item và lưu chuẩn ở order_item.
+    - Override chỉ hợp lệ khi manager approved và có lý do hợp lệ.
   confidence: high
   generated_at: 2026-04-13T23:08:30+07:00
   generator_version: agent-skill-doc-generator@1.0
@@ -220,10 +290,13 @@ implementation_notes:
   open_questions:
     - Có cần cho phép đơn ở trạng thái draft khi chưa thanh toán xong không?
     - Cần giới hạn số phương thức split payment tối đa bao nhiêu?
+    - Có bắt buộc reason_note khi reason_code thuộc nhóm nhạy cảm không?
   acceptance_criteria:
     - Tạo đơn phải lock đủ item rồi mới commit.
     - Mọi order_item có final_sell_price không được null.
     - split_payments phải cân bằng tuyệt đối với grand_total.
+    - Nếu có checkout_override thì luôn có manager_approval_token và reason_code hợp lệ.
+    - Hành động override luôn có audit_log với before/after + actor + reason.
 
 testing:
   contract_tests:
@@ -259,6 +332,39 @@ testing:
       type: auth_check
       auto_generate: true
       expected_status: 401
+    - name: should_apply_checkout_override_with_manager_approval
+      type: happy_path
+      auto_generate: true
+      input:
+        item_ids: [ITM-0001]
+        discount_type: none
+        discount_value: 0
+        checkout_override:
+          new_grand_total: 85000
+          reason_code: complaint_recovery
+          manager_approval_token: mgr-approval-001
+        split_payments:
+          - method: cash
+            amount: 85000
+        request_id: req-pos-003
+      expected_status: 200
+    - name: should_fail_override_without_reason
+      type: error_case
+      auto_generate: true
+      input:
+        item_ids: [ITM-0001]
+        discount_type: none
+        discount_value: 0
+        checkout_override:
+          new_grand_total: 85000
+          manager_approval_token: mgr-approval-001
+        split_payments:
+          - method: cash
+            amount: 85000
+        request_id: req-pos-004
+      expected_status: 400
+      expected_error:
+        code: OVERRIDE_REASON_REQUIRED
   mock:
     enabled: true
     output_path: mocks/bp_pos-create-order_v1.mock.json
@@ -275,6 +381,8 @@ testing:
         delay_ms: 50
       - error_code: ORDER_LOCK_CONFLICT
         delay_ms: 300
+      - error_code: MANAGER_APPROVAL_REQUIRED
+        delay_ms: 60
   frontend_scenarios:
     - scenario: checkout_loading
       description: Khóa thao tác khi đang xử lý thanh toán.

@@ -54,6 +54,7 @@ Thứ tự đọc khuyến nghị cho thành viên mới:
    - [Flow Rental Return](user-flows/flow_rental-return.md)
 9. Realtime, migration, config:
    - [Realtime contract](realtime/realtime_item-live-updates.yaml)
+   - [Realtime implementation](realtime/implementation_websocket.md)
    - [Migration runbook](migrations/migration_blueprint-to-implementation-v1.md)
    - [Runtime config](config/config_storyhub-runtime.yaml)
 10. [Lịch sử thay đổi phát hành](../CHANGELOG.md)
@@ -91,6 +92,7 @@ Thứ tự đọc khuyến nghị cho thành viên mới:
 - [database](database): Thiết kế schema cốt lõi.
 - [config](config): Cấu hình runtime chuẩn.
 - [realtime](realtime): Hợp đồng kênh realtime.
+- [realtime/implementation_websocket.md](realtime/implementation_websocket.md): Chi tiết kiến trúc và lifecycle realtime.
 - [migrations](migrations): Runbook chuyển từ blueprint sang implemented.
 - [how-to](how-to): Hướng dẫn thực thi dự án theo giai đoạn.
 
@@ -99,6 +101,7 @@ Thứ tự đọc khuyến nghị cho thành viên mới:
 - [standards/standard_terminology-glossary.md](standards/standard_terminology-glossary.md): Bộ thuật ngữ chuẩn để đồng bộ cách gọi giữa các vai trò.
 - [standards/standard_coding-and-collaboration.md](standards/standard_coding-and-collaboration.md): Quy ước coding, review, commit và cộng tác.
 - [how-to/howto_development-environment-setup.md](how-to/howto_development-environment-setup.md): Hướng dẫn setup môi trường dev cho thành viên mới.
+- [how-to/runbook_websocket-troubleshooting.md](how-to/runbook_websocket-troubleshooting.md): Runbook debug realtime websocket.
 - [../CHANGELOG.md](../CHANGELOG.md): Lịch sử thay đổi theo từng phiên bản phát hành.
 
 ## 6) Trạng thái tài liệu hiện tại

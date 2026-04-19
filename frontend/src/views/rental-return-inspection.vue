@@ -26,9 +26,9 @@
       </transition>
 
       <transition name="fade">
-        <div v-if="scannerToast" class="scanner-toast">
-          <span class="material-icons">qr_code_scanner</span>
-          {{ scannerToast }}
+        <div v-if="scannerToast.message" :class="['scanner-toast', scannerToast.type]">
+          <span class="material-icons">{{ scannerToast.icon }}</span>
+          {{ scannerToast.message }}
         </div>
       </transition>
 
@@ -48,6 +48,7 @@
           <div class="contract-search-wrap" :class="{ 'scan-highlight': inputHighlight }">
             <span class="material-icons">manage_search</span>
             <input
+              ref="contractInputRef"
               v-model="contractInput"
               type="text"
               placeholder="Quét hoặc nhập mã hợp đồng (ví dụ: 2001)..."
@@ -63,6 +64,85 @@
             >
               {{ isCheckingContract ? "Đang kiểm tra" : "Kiểm tra" }}
             </button>
+          </div>
+          <p class="contract-guidance">Gợi ý: mã hợp đồng thường là dạng số, hiển thị ngay sau giao dịch thuê thành công (ví dụ HĐ #1234). Có thể quét trực tiếp phiếu/mã để vào phiên trả mà không cần nhập tay.</p>
+
+          <div class="contract-lookup-panel">
+            <div class="contract-lookup-header">
+              <strong>Hợp đồng đang thuê</strong>
+              <button
+                class="lookup-refresh-btn"
+                type="button"
+                :disabled="isLoadingContractLookup"
+                @click="refreshReturnableContracts"
+              >
+                {{ isLoadingContractLookup ? "Đang tải..." : "Làm mới" }}
+              </button>
+            </div>
+
+            <div class="contract-lookup-search">
+              <span class="material-icons">search</span>
+              <input
+                v-model="contractLookupQuery"
+                type="text"
+                placeholder="Tìm theo mã HĐ, tên khách hoặc SĐT..."
+                data-testid="rental-return-contract-list-search"
+              />
+            </div>
+
+            <div class="contract-lookup-filters">
+              <button
+                v-for="option in contractLookupStatusFilterOptions"
+                :key="option.value"
+                type="button"
+                :class="[
+                  'lookup-filter-btn',
+                  { active: contractLookupStatusFilter === option.value },
+                ]"
+                @click="contractLookupStatusFilter = option.value"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+
+            <div v-if="contractLookupError" class="lookup-error">
+              {{ contractLookupError }}
+            </div>
+            <div v-else-if="isLoadingContractLookup" class="lookup-loading">
+              <span class="material-icons spin">autorenew</span>
+              Đang tải danh sách hợp đồng...
+            </div>
+            <ul v-else-if="filteredReturnableContracts.length > 0" class="contract-lookup-list">
+              <li
+                v-for="contract in filteredReturnableContracts"
+                :key="contract.contract_id"
+                class="contract-lookup-item"
+                :class="{ active: Number(contract.contract_id) === activeContractId }"
+              >
+                <button
+                  class="contract-lookup-button"
+                  type="button"
+                  :disabled="isCheckingContract || isSettling"
+                  @click="selectContractFromLookup(contract.contract_id)"
+                >
+                  <div class="lookup-top-row">
+                    <strong>HĐ #{{ contract.contract_id }}</strong>
+                    <span :class="['lookup-status-chip', contract.statusClass]">
+                      {{ contract.statusLabel }}
+                    </span>
+                  </div>
+                  <div class="lookup-bottom-row">
+                    <span>{{ contract.customer_name }} • {{ contract.customer_phone }}</span>
+                    <span>{{ contract.open_item_count }} item chưa trả</span>
+                    <span>Hạn trả {{ contract.dueDate }}</span>
+                    <span>Đầu sách: {{ contract.rentedItemsPreview }}</span>
+                  </div>
+                </button>
+              </li>
+            </ul>
+            <p v-else class="lookup-empty">
+              Không có hợp đồng phù hợp với bộ lọc hiện tại.
+            </p>
           </div>
 
           <div v-if="isCheckingContract" class="inline-loading">
@@ -116,8 +196,8 @@
                     </div>
                   </td>
                   <td>
-                    <span :class="['scan-state', line.scanned ? 'ok' : 'pending']">
-                      {{ line.scanned ? "Đã quét" : "Chờ quét" }}
+                    <span :class="['scan-state', lineScanStateClass(line)]">
+                      {{ lineScanStateLabel(line) }}
                     </span>
                   </td>
                   <td>
@@ -145,6 +225,17 @@
             </table>
           </div>
 
+          <div v-if="currentContract" class="quick-preset-row">
+            <button type="button" class="btn-preset good" @click="setAllConditions('good')">
+              <span class="material-icons">done_all</span>
+              Tất cả tốt
+            </button>
+            <button type="button" class="btn-preset lost" @click="setAllConditions('lost')">
+              <span class="material-icons">remove_circle</span>
+              Đánh dấu mất hết
+            </button>
+          </div>
+
           <div v-else class="empty-state">
             <span class="material-icons">inventory</span>
             <p>Quét hợp đồng để bắt đầu phiên trả truyện.</p>
@@ -160,38 +251,38 @@
           </div>
 
           <div class="summary-box">
-            <div class="line">
+            <div class="line" :class="summaryFlashClass">
               <span>Phí thuê</span>
               <strong>{{ formatCurrency(summary.rental_fee) }}</strong>
             </div>
-            <div class="line">
+            <div class="line" :class="summaryFlashClass">
               <span>Phí trễ hạn</span>
               <strong>{{ formatCurrency(summary.late_fee) }}</strong>
             </div>
-            <div class="line">
+            <div class="line" :class="summaryFlashClass">
               <span>Phí hư hỏng</span>
               <strong>{{ formatCurrency(summary.damage_fee) }}</strong>
             </div>
-            <div class="line">
+            <div class="line" :class="summaryFlashClass">
               <span>Phí mất</span>
               <strong>{{ formatCurrency(summary.lost_fee) }}</strong>
             </div>
 
             <div class="divider"></div>
 
-            <div class="line total">
+            <div class="line total" :class="summaryFlashClass">
               <span>Tổng phí</span>
               <strong>{{ formatCurrency(summary.total_fee) }}</strong>
             </div>
-            <div class="line">
+            <div class="line" :class="summaryFlashClass">
               <span>Trừ vào cọc</span>
               <strong>{{ formatCurrency(summary.deducted_from_deposit) }}</strong>
             </div>
-            <div class="line success">
+            <div class="line success" :class="summaryFlashClass">
               <span>Hoàn khách</span>
               <strong>{{ formatCurrency(summary.refund_to_customer) }}</strong>
             </div>
-            <div class="line warning">
+            <div class="line warning" :class="summaryFlashClass">
               <span>Nợ còn lại</span>
               <strong>{{ formatCurrency(summary.remaining_debt) }}</strong>
             </div>
@@ -218,6 +309,8 @@
         </aside>
       </div>
 
+      <HotkeyBar :items="hotkeyItems" />
+
       <div v-if="isSettling" class="overlay-loading">
         <div class="overlay-card">
           <span class="material-icons spin">sync</span>
@@ -229,18 +322,28 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 
+import { useWebSocket } from "../composables/useWebSocket";
 import DefaultLayout from "../components/layout/defaultLayout.vue";
+import HotkeyBar, { type HotkeyItem } from "../components/layout/HotkeyBar.vue";
 import {
+  fetchRentalSettlementStatus,
   fetchRentalContractPreview,
+  fetchReturnableRentalContracts,
   StoryHubApiError,
   buildRequestId,
   returnRentalItems,
   type RentalContractPreviewPayload,
+  type ReturnableRentalContractListItem,
   type RentalReturnCondition,
   type ReturnRentalItemsPayload,
 } from "../services/storyhubApi";
+import type {
+  ItemStatusChangedEvent,
+  RentalSettlementFinishedEvent,
+} from "../types/realtime";
 import { toUiErrorMessage } from "../utils/backendErrorMessages";
 import { playScanAudio } from "../utils/scanAudio";
 
@@ -249,7 +352,23 @@ interface ScannerScanEventDetail {
 }
 
 interface HotkeyEventDetail {
-  name?: "f1" | "escape" | "enter" | "digit-1" | "digit-2" | "digit-3" | "digit-4";
+  name?:
+    | "f1"
+    | "f2"
+    | "escape"
+    | "enter"
+    | "digit-1"
+    | "digit-2"
+    | "digit-3"
+    | "digit-4"
+    | "arrow-up"
+    | "arrow-down";
+}
+
+interface ScannerToastUi {
+  message: string;
+  type: "success" | "warning" | "error";
+  icon: string;
 }
 
 interface ReturnLinePreset {
@@ -271,6 +390,22 @@ interface ContractPreviewUi {
   damageFeeMajorPercent: number;
   lines: ReturnLinePreset[];
 }
+
+interface ReturnableContractLookupUi {
+  contract_id: string;
+  customer_name: string;
+  customer_phone: string;
+  rentedItemsPreview: string;
+  status: ReturnableRentalContractListItem["status"];
+  statusLabel: string;
+  statusClass: "status-active" | "status-partial" | "status-overdue";
+  dueDate: string;
+  open_item_count: number;
+}
+
+type ContractLookupStatusFilter =
+  | "all"
+  | ReturnableRentalContractListItem["status"];
 
 interface ReturnLineUi extends ReturnLinePreset {
   condition_after: RentalReturnCondition;
@@ -306,12 +441,28 @@ const conditionOptions: Array<{
   { value: "lost", label: "Mất", hotkey: "4", className: "lost" },
 ];
 
+const hotkeyItems: HotkeyItem[] = [
+  { key: "F1 / Enter", label: "Kiểm tra hoặc kết toán" },
+  { key: "F2", label: "Focus ô nhập hợp đồng" },
+  { key: "↑ ↓", label: "Di chuyển dòng item" },
+  { key: "1 2 3 4", label: "Đặt condition" },
+  { key: "ESC", label: "Về Command Hub" },
+];
+
 const addNotification = inject("addNotification") as (
   type: string,
   msg: string,
 ) => void;
+const route = useRoute();
+const ws = useWebSocket();
 
 const contractInput = ref("");
+const contractInputRef = ref<HTMLInputElement | null>(null);
+const contractLookupQuery = ref("");
+const contractLookupStatusFilter = ref<ContractLookupStatusFilter>("all");
+const returnableContracts = ref<ReturnableContractLookupUi[]>([]);
+const isLoadingContractLookup = ref(false);
+const contractLookupError = ref("");
 const currentContract = ref<ContractPreviewUi | null>(null);
 const returnLines = ref<ReturnLineUi[]>([]);
 const selectedLineIndex = ref(0);
@@ -319,16 +470,37 @@ const isCheckingContract = ref(false);
 const isSettling = ref(false);
 const settlementResult = ref<ReturnRentalItemsPayload | null>(null);
 const recoverableError = ref<RecoverableError | null>(null);
-const scannerToast = ref("");
+const scannerToast = ref<ScannerToastUi>({
+  message: "",
+  type: "success",
+  icon: "check_circle",
+});
 const inputHighlight = ref(false);
+const summaryFlashClass = ref<"flash-pos" | "flash-neg" | "">("");
 
 let scannerToastTimer: ReturnType<typeof setTimeout> | null = null;
 let inputHighlightTimer: ReturnType<typeof setTimeout> | null = null;
+let summaryFlashTimer: ReturnType<typeof setTimeout> | null = null;
+let contractLookupDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let contractLookupRequestCounter = 0;
+let stopRealtimeItemWatch: (() => void) | null = null;
+let stopRealtimeSettlementWatch: (() => void) | null = null;
 
 const scannedLines = computed(() => returnLines.value.filter((line) => line.scanned));
 
+const settlementLines = computed(() =>
+  scannedLines.value.length > 0 ? scannedLines.value : returnLines.value,
+);
+
 const canSubmitSettlement = computed(
-  () => currentContract.value !== null && scannedLines.value.length > 0,
+  () => currentContract.value !== null && settlementLines.value.length > 0,
+);
+
+const isManualSettlementMode = computed(
+  () =>
+    currentContract.value !== null &&
+    scannedLines.value.length === 0 &&
+    returnLines.value.length > 0,
 );
 
 const formatContractDate = (rawValue: string): string => {
@@ -366,6 +538,43 @@ const mapContractPreview = (
   };
 };
 
+const mapReturnableContract = (
+  payload: ReturnableRentalContractListItem,
+): ReturnableContractLookupUi => {
+  let statusLabel = "Đang thuê";
+  let statusClass: ReturnableContractLookupUi["statusClass"] = "status-active";
+
+  if (payload.status === "overdue") {
+    statusLabel = "Quá hạn";
+    statusClass = "status-overdue";
+  } else if (payload.status === "partial_returned") {
+    statusLabel = "Trả một phần";
+    statusClass = "status-partial";
+  }
+
+  return {
+    contract_id: payload.contract_id,
+    customer_name: payload.customer_name,
+    customer_phone: payload.customer_phone,
+    rentedItemsPreview: payload.rented_items_preview || "Chưa có tên đầu sách",
+    status: payload.status,
+    statusLabel,
+    statusClass,
+    dueDate: formatContractDate(payload.due_date),
+    open_item_count: payload.open_item_count,
+  };
+};
+
+const contractLookupStatusFilterOptions: Array<{
+  value: ContractLookupStatusFilter;
+  label: string;
+}> = [
+  { value: "all", label: "Tất cả" },
+  { value: "active", label: "Đang thuê" },
+  { value: "partial_returned", label: "Trả một phần" },
+  { value: "overdue", label: "Quá hạn" },
+];
+
 const estimatedSummary = computed(() => {
   const contract = currentContract.value;
   if (!contract) {
@@ -381,12 +590,12 @@ const estimatedSummary = computed(() => {
     };
   }
 
-  const rentalFee = scannedLines.value.reduce((sum, line) => sum + line.rental_fee, 0);
-  const lateFee = scannedLines.value.reduce(
+  const rentalFee = settlementLines.value.reduce((sum, line) => sum + line.rental_fee, 0);
+  const lateFee = settlementLines.value.reduce(
     (sum, line) => sum + line.overdue_days * contract.overdueFeePerDay,
     0,
   );
-  const damageFee = scannedLines.value
+  const damageFee = settlementLines.value
     .filter(
       (line) =>
         line.condition_after === "minor_damage" ||
@@ -409,19 +618,19 @@ const estimatedSummary = computed(() => {
         )
       );
     }, 0);
-  const lostFee = scannedLines.value
+  const lostFee = settlementLines.value
     .filter((line) => line.condition_after === "lost")
     .reduce((sum, line) => sum + line.final_deposit, 0);
 
   const totalFee = rentalFee + lateFee + damageFee + lostFee;
-  const hasScannedLine = scannedLines.value.length > 0;
-  const deductedFromDeposit = hasScannedLine
+  const hasSettlementLine = settlementLines.value.length > 0;
+  const deductedFromDeposit = hasSettlementLine
     ? Math.min(totalFee, contract.deposit)
     : 0;
-  const refundToCustomer = hasScannedLine
+  const refundToCustomer = hasSettlementLine
     ? Math.max(contract.deposit - totalFee, 0)
     : 0;
-  const remainingDebt = hasScannedLine
+  const remainingDebt = hasSettlementLine
     ? Math.max(totalFee - contract.deposit, 0)
     : 0;
 
@@ -476,6 +685,26 @@ const formatCurrency = (value: number) =>
     value,
   );
 
+const lineScanStateClass = (line: ReturnLineUi) => {
+  if (line.scanned) {
+    return "ok";
+  }
+  if (isManualSettlementMode.value) {
+    return "manual";
+  }
+  return "pending";
+};
+
+const lineScanStateLabel = (line: ReturnLineUi) => {
+  if (line.scanned) {
+    return "Đã quét";
+  }
+  if (isManualSettlementMode.value) {
+    return "Thủ công";
+  }
+  return "Chờ quét";
+};
+
 const normalizeContractId = (rawValue: string): number | null => {
   const digits = rawValue.replace(/\D/g, "");
   if (!digits) {
@@ -490,18 +719,46 @@ const normalizeContractId = (rawValue: string): number | null => {
   return parsed;
 };
 
+const activeContractId = computed(
+  () => currentContract.value?.id ?? normalizeContractId(contractInput.value),
+);
+
+const filteredReturnableContracts = computed(() => {
+  if (contractLookupStatusFilter.value === "all") {
+    return returnableContracts.value;
+  }
+
+  return returnableContracts.value.filter(
+    (contract) => contract.status === contractLookupStatusFilter.value,
+  );
+});
+
 const normalizeScanToken = (rawValue: string) =>
   rawValue.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 
-const flashScannerToast = (message: string) => {
-  scannerToast.value = message;
+const flashScannerToast = (
+  message: string,
+  type: ScannerToastUi["type"] = "success",
+) => {
+  const iconMap: Record<ScannerToastUi["type"], string> = {
+    success: "check_circle",
+    warning: "search",
+    error: "error",
+  };
+
+  scannerToast.value = {
+    message,
+    type,
+    icon: iconMap[type],
+  };
+
   if (scannerToastTimer) {
     clearTimeout(scannerToastTimer);
   }
   scannerToastTimer = setTimeout(() => {
-    scannerToast.value = "";
+    scannerToast.value.message = "";
     scannerToastTimer = null;
-  }, 1000);
+  }, 1300);
 };
 
 const flashInputHighlight = () => {
@@ -553,6 +810,81 @@ const setConditionFromHotkey = (hotkeyName: HotkeyEventDetail["name"]) => {
   }
 };
 
+const setAllConditions = (condition: RentalReturnCondition) => {
+  returnLines.value.forEach((line) => {
+    line.condition_after = condition;
+  });
+
+  if (condition === "good") {
+    addNotification("success", "Đã đặt condition tất cả item = Tốt.");
+    return;
+  }
+
+  addNotification("warning", "Đã đặt condition tất cả item = Mất.");
+};
+
+const moveSelectedLine = (delta: number) => {
+  if (returnLines.value.length === 0) {
+    return;
+  }
+
+  if (selectedLineIndex.value < 0) {
+    selectedLineIndex.value = 0;
+    return;
+  }
+
+  selectedLineIndex.value = Math.min(
+    returnLines.value.length - 1,
+    Math.max(0, selectedLineIndex.value + delta),
+  );
+};
+
+const loadReturnableContracts = async (queryValue = contractLookupQuery.value) => {
+  const requestCounter = ++contractLookupRequestCounter;
+  isLoadingContractLookup.value = true;
+  contractLookupError.value = "";
+
+  try {
+    const records = await fetchReturnableRentalContracts(queryValue, 30);
+    if (requestCounter !== contractLookupRequestCounter) {
+      return;
+    }
+
+    returnableContracts.value = records.map(mapReturnableContract);
+  } catch (error) {
+    if (requestCounter !== contractLookupRequestCounter) {
+      return;
+    }
+
+    returnableContracts.value = [];
+    if (error instanceof StoryHubApiError) {
+      contractLookupError.value = toUiErrorMessage(error.code, error.message);
+      return;
+    }
+
+    contractLookupError.value =
+      "Không thể tải danh sách hợp đồng đang thuê. Vui lòng thử lại.";
+  } finally {
+    if (requestCounter === contractLookupRequestCounter) {
+      isLoadingContractLookup.value = false;
+    }
+  }
+};
+
+const refreshReturnableContracts = async () => {
+  await loadReturnableContracts();
+};
+
+const selectContractFromLookup = async (contractId: string) => {
+  if (isCheckingContract.value || isSettling.value) {
+    return;
+  }
+
+  contractInput.value = contractId;
+  contractInputRef.value?.focus();
+  await loadContractPreview();
+};
+
 const loadContractPreview = async () => {
   const normalizedId = normalizeContractId(contractInput.value);
   if (normalizedId === null) {
@@ -590,7 +922,7 @@ const loadContractPreview = async () => {
 
     addNotification(
       "success",
-      `Đã nạp hợp đồng #${normalizedId}. Bắt đầu quét item trả.`,
+      `Đã nạp hợp đồng #${normalizedId}. Có thể quét item hoặc kết toán thủ công.`,
     );
     playScanAudio("success");
   } catch (error) {
@@ -660,7 +992,7 @@ const submitSettlement = async () => {
   }
 
   if (!canSubmitSettlement.value) {
-    addNotification("warning", "Cần quét ít nhất một item trước khi kết toán.");
+    addNotification("warning", "Không có item nào để kết toán trong hợp đồng này.");
     return;
   }
 
@@ -670,7 +1002,7 @@ const submitSettlement = async () => {
 
   try {
     const payload = await returnRentalItems(currentContract.value.id, {
-      return_lines: scannedLines.value.map((line) => ({
+      return_lines: settlementLines.value.map((line) => ({
         item_id: line.item_id,
         condition_after: line.condition_after,
       })),
@@ -682,6 +1014,7 @@ const submitSettlement = async () => {
       "success",
       `Kết toán thành công hợp đồng #${payload.contract_id}. Hoàn khách ${formatCurrency(payload.refund_to_customer)}.`,
     );
+    void loadReturnableContracts();
   } catch (error) {
     if (error instanceof StoryHubApiError) {
       if (error.code === "NETWORK_ERROR" || error.code === "LOCK_CONFLICT") {
@@ -716,6 +1049,83 @@ const retrySettlement = async () => {
   await submitSettlement();
 };
 
+const applyRealtimeSettlementSnapshot = async (contractId: number) => {
+  try {
+    const snapshot = await fetchRentalSettlementStatus(contractId);
+    if (!snapshot.settlement_id) {
+      return;
+    }
+
+    settlementResult.value = {
+      settlement_id: snapshot.settlement_id,
+      contract_id: snapshot.contract_id,
+      rental_fee: snapshot.rental_fee,
+      late_fee: snapshot.late_fee,
+      damage_fee: snapshot.damage_fee,
+      lost_fee: snapshot.lost_fee,
+      total_fee: snapshot.total_fee,
+      deducted_from_deposit: snapshot.deducted_from_deposit,
+      refund_to_customer: snapshot.refund_to_customer,
+      remaining_debt: snapshot.remaining_debt,
+      contract_status:
+        snapshot.contract_status === "closed" ? "closed" : "partial_returned",
+    };
+  } catch {
+    // Ignore snapshot refresh errors; UI keeps previous values.
+  }
+};
+
+const handleRealtimeSettlementEvent = (event: RentalSettlementFinishedEvent) => {
+  if (!currentContract.value) {
+    return;
+  }
+
+  const activeContractId = String(currentContract.value.id);
+  if (event.contract_id !== activeContractId) {
+    return;
+  }
+
+  void applyRealtimeSettlementSnapshot(Number(event.contract_id));
+  addNotification(
+    "success",
+    `Settlement đã được cập nhật realtime cho HĐ #${event.contract_id}.`,
+  );
+};
+
+const handleRealtimeItemStatus = (event: ItemStatusChangedEvent) => {
+  if (!currentContract.value) {
+    return;
+  }
+
+  const normalizedEventItem = normalizeScanToken(event.item_id);
+  if (!normalizedEventItem) {
+    return;
+  }
+
+  const line = returnLines.value.find((candidate) => {
+    return (
+      normalizeScanToken(candidate.item_id) === normalizedEventItem ||
+      normalizeScanToken(candidate.barcode) === normalizedEventItem
+    );
+  });
+
+  if (!line) {
+    return;
+  }
+
+  const nextStatus = event.new_status.toLowerCase();
+  if (nextStatus !== "available" && nextStatus !== "lost") {
+    return;
+  }
+
+  line.scanned = true;
+  line.duplicate = false;
+  if (nextStatus === "lost") {
+    line.condition_after = "lost";
+  }
+  markLineHighlight(line);
+};
+
 const resetWorkflow = () => {
   contractInput.value = "";
   currentContract.value = null;
@@ -723,7 +1133,7 @@ const resetWorkflow = () => {
   selectedLineIndex.value = 0;
   recoverableError.value = null;
   settlementResult.value = null;
-  scannerToast.value = "";
+  scannerToast.value.message = "";
   inputHighlight.value = false;
   addNotification("info", "Đã hủy phiên hoàn trả hiện tại.");
 };
@@ -739,20 +1149,20 @@ const handleScannerScan = (event: Event) => {
 
   if (!currentContract.value) {
     contractInput.value = rawCode;
-    flashScannerToast(`Đã quét hợp đồng: ${rawCode}`);
+    flashScannerToast(`Đã quét hợp đồng: ${rawCode}`, "success");
     void loadContractPreview();
     return;
   }
 
   const matched = scanReturnItem(rawCode);
   if (matched) {
-    flashScannerToast(`Đã quét item: ${rawCode}`);
+    flashScannerToast(`Đã quét item: ${rawCode}`, "success");
     return;
   }
 
   playScanAudio("error");
   addNotification("error", "Item quét không thuộc hợp đồng hiện tại.");
-  flashScannerToast(`Từ chối item: ${rawCode}`);
+  flashScannerToast(`Từ chối item: ${rawCode}`, "warning");
 };
 
 const handleGlobalHotkey = (event: Event) => {
@@ -769,6 +1179,21 @@ const handleGlobalHotkey = (event: Event) => {
     return;
   }
 
+  if (hotkey === "f2") {
+    contractInputRef.value?.focus();
+    return;
+  }
+
+  if (hotkey === "arrow-up") {
+    moveSelectedLine(-1);
+    return;
+  }
+
+  if (hotkey === "arrow-down") {
+    moveSelectedLine(1);
+    return;
+  }
+
   if (
     hotkey === "digit-1" ||
     hotkey === "digit-2" ||
@@ -780,11 +1205,55 @@ const handleGlobalHotkey = (event: Event) => {
 };
 
 onMounted(() => {
+  ws.connect("cashier-demo", "main");
+  ws.subscribe(["item_status_changed", "rental_settlement_finished"]);
+  stopRealtimeItemWatch = watch(
+    () => ws.latestItemStatusEvent.value,
+    (event) => {
+      if (!event) {
+        return;
+      }
+      handleRealtimeItemStatus(event);
+    },
+    { immediate: true },
+  );
+  stopRealtimeSettlementWatch = watch(
+    () => ws.latestSettlementEvent.value,
+    (event) => {
+      if (!event) {
+        return;
+      }
+      handleRealtimeSettlementEvent(event);
+    },
+    { immediate: true },
+  );
+
   window.addEventListener("storyhub:scan", handleScannerScan as EventListener);
   window.addEventListener("storyhub:hotkey", handleGlobalHotkey as EventListener);
+  void loadReturnableContracts();
+
+  const scannedContract = String(route.query.scan ?? "").trim();
+  if (scannedContract) {
+    contractInput.value = scannedContract;
+    void loadContractPreview();
+  }
 });
 
 onBeforeUnmount(() => {
+  ws.unsubscribe(["item_status_changed", "rental_settlement_finished"]);
+  ws.setTrackedItems([]);
+  ws.setTrackedContracts([]);
+
+  if (stopRealtimeItemWatch) {
+    stopRealtimeItemWatch();
+    stopRealtimeItemWatch = null;
+  }
+
+  if (stopRealtimeSettlementWatch) {
+    stopRealtimeSettlementWatch();
+    stopRealtimeSettlementWatch = null;
+  }
+
   window.removeEventListener("storyhub:scan", handleScannerScan as EventListener);
   window.removeEventListener("storyhub:hotkey", handleGlobalHotkey as EventListener);
 
@@ -797,7 +1266,66 @@ onBeforeUnmount(() => {
     clearTimeout(inputHighlightTimer);
     inputHighlightTimer = null;
   }
+
+  if (summaryFlashTimer) {
+    clearTimeout(summaryFlashTimer);
+    summaryFlashTimer = null;
+  }
+
+  if (contractLookupDebounceTimer) {
+    clearTimeout(contractLookupDebounceTimer);
+    contractLookupDebounceTimer = null;
+  }
 });
+
+watch(contractLookupQuery, (nextValue) => {
+  if (contractLookupDebounceTimer) {
+    clearTimeout(contractLookupDebounceTimer);
+  }
+
+  contractLookupDebounceTimer = setTimeout(() => {
+    void loadReturnableContracts(nextValue);
+    contractLookupDebounceTimer = null;
+  }, 280);
+});
+
+watch(
+  () => returnLines.value.map((line) => line.item_id),
+  (itemIds) => {
+    ws.setTrackedItems(itemIds);
+  },
+  { immediate: true },
+);
+
+watch(
+  () => currentContract.value?.id ?? null,
+  (contractId) => {
+    if (!contractId) {
+      ws.setTrackedContracts([]);
+      return;
+    }
+    ws.setTrackedContracts([contractId]);
+  },
+  { immediate: true },
+);
+
+watch(
+  () => summary.value.total_fee,
+  (next, prev) => {
+    if (prev === undefined || next === prev) {
+      return;
+    }
+
+    summaryFlashClass.value = next > prev ? "flash-neg" : "flash-pos";
+    if (summaryFlashTimer) {
+      clearTimeout(summaryFlashTimer);
+    }
+    summaryFlashTimer = setTimeout(() => {
+      summaryFlashClass.value = "";
+      summaryFlashTimer = null;
+    }, 480);
+  },
+);
 </script>
 
 <style scoped>
@@ -904,6 +1432,24 @@ onBeforeUnmount(() => {
   font-weight: 700;
 }
 
+.scanner-toast.success {
+  border-color: #86efac;
+  background: #ecfdf3;
+  color: #166534;
+}
+
+.scanner-toast.warning {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.scanner-toast.error {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #991b1b;
+}
+
 .return-grid-layout {
   display: grid;
   grid-template-columns: 1fr 380px;
@@ -982,6 +1528,210 @@ onBeforeUnmount(() => {
   font-family: inherit;
   font-size: 0.92rem;
   font-weight: 600;
+}
+
+.contract-guidance {
+  margin: 8px 0 0;
+  color: #64748b;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.contract-lookup-panel {
+  margin-top: 14px;
+  border: 1px solid #dbeafe;
+  background: linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.contract-lookup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.contract-lookup-header strong {
+  color: #1e293b;
+  font-size: 0.9rem;
+}
+
+.lookup-refresh-btn {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.lookup-refresh-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.contract-lookup-search {
+  margin-top: 10px;
+  border: 1px solid #dbeafe;
+  background: white;
+  border-radius: 10px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.contract-lookup-search .material-icons {
+  font-size: 1rem;
+  color: #64748b;
+}
+
+.contract-lookup-search input {
+  border: none;
+  outline: none;
+  width: 100%;
+  font-size: 0.84rem;
+  font-family: inherit;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.contract-lookup-filters {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.lookup-filter-btn {
+  border: 1px solid #cbd5e1;
+  background: white;
+  color: #475569;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.lookup-filter-btn.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.lookup-loading,
+.lookup-error,
+.lookup-empty {
+  margin-top: 10px;
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.lookup-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #bfdbfe;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.lookup-error {
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  background: #fff1f2;
+}
+
+.lookup-empty {
+  border: 1px dashed #cbd5e1;
+  color: #64748b;
+  background: #f8fafc;
+  margin-bottom: 0;
+}
+
+.contract-lookup-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.contract-lookup-item {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: white;
+}
+
+.contract-lookup-item.active {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.contract-lookup-button {
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.contract-lookup-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.8;
+}
+
+.lookup-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #0f172a;
+}
+
+.lookup-bottom-row {
+  display: grid;
+  gap: 2px;
+  color: #475569;
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.lookup-status-chip {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  border: 1px solid transparent;
+}
+
+.lookup-status-chip.status-active {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #86efac;
+}
+
+.lookup-status-chip.status-partial {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: #fcd34d;
+}
+
+.lookup-status-chip.status-overdue {
+  background: #fee2e2;
+  color: #991b1b;
+  border-color: #fca5a5;
 }
 
 .btn-action {
@@ -1116,6 +1866,11 @@ tbody tr.duplicate td {
   color: #166534;
 }
 
+.scan-state.manual {
+  background: #fef3c7;
+  color: #92400e;
+}
+
 .condition-chip-group {
   display: flex;
   flex-wrap: wrap;
@@ -1175,6 +1930,34 @@ tbody tr.duplicate td {
   margin-bottom: 6px;
 }
 
+.quick-preset-row {
+  margin-top: 14px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn-preset {
+  border: none;
+  border-radius: 10px;
+  padding: 9px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.btn-preset.good {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.btn-preset.lost {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .summary-box {
   border-radius: 16px;
   background: #f8fafc;
@@ -1202,6 +1985,14 @@ tbody tr.duplicate td {
 
 .summary-box .line.warning strong {
   color: #9a3412;
+}
+
+.summary-box .line.flash-pos {
+  animation: summaryFlashPositive 0.45s ease;
+}
+
+.summary-box .line.flash-neg {
+  animation: summaryFlashNegative 0.45s ease;
 }
 
 .divider {
@@ -1281,6 +2072,24 @@ tbody tr.duplicate td {
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes summaryFlashPositive {
+  0% {
+    background: #ecfdf3;
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+@keyframes summaryFlashNegative {
+  0% {
+    background: #fff1f2;
+  }
+  100% {
+    background: transparent;
   }
 }
 

@@ -9,7 +9,12 @@ from urllib.parse import unquote
 
 from app.core.config import get_settings
 
-MIGRATION_VERSION = "0001_initial_schema"
+MIGRATION_VERSIONS = [
+    "0001_initial_schema",
+    "0002_add_base_price",
+    "0003_create_user_table",
+    "0004_pricing_rules_and_snapshots",
+]
 _SCHEMA_MIGRATIONS_TABLE = "schema_migrations"
 
 
@@ -20,13 +25,18 @@ class MigrationScript:
     down_path: Path
 
 
-def get_migration_script(version: str = MIGRATION_VERSION) -> MigrationScript:
+def get_migration_script(version: str) -> MigrationScript:
+    # Check both potential migration directories
+    # 1. app/db/migrations (custom)
+    # 2. migrations/ (root)
     migration_dir = Path(__file__).resolve().parent / "migrations"
+    
     up_path = migration_dir / f"{version}.up.sql"
     down_path = migration_dir / f"{version}.down.sql"
 
-    if not up_path.exists() or not down_path.exists():
-        raise FileNotFoundError(f"Migration files for '{version}' were not found.")
+    if not up_path.exists():
+        # Fallback to root migrations if needed, but standard is the app/db/migrations
+        raise FileNotFoundError(f"Migration file '{up_path}' was not found.")
 
     return MigrationScript(version=version, up_path=up_path, down_path=down_path)
 
@@ -97,84 +107,122 @@ def _is_migration_applied(connection: sqlite3.Connection, version: str) -> bool:
 
 def apply_schema_migration(
     database_url: str | None = None,
-    version: str = MIGRATION_VERSION,
-) -> bool:
+    version: str | None = None,
+    *,
+    return_count: bool = False,
+) -> bool | int:
     resolved_url = resolve_database_url(database_url)
-    script = get_migration_script(version)
     connection = open_sqlite_connection(resolved_url)
+    versions_to_apply = [version] if version else MIGRATION_VERSIONS
+    applied_count = 0
 
     try:
         _ensure_migrations_table(connection)
-        if _is_migration_applied(connection, version):
-            return False
+        for v in versions_to_apply:
+            if _is_migration_applied(connection, v):
+                continue
+            
+            try:
+                script = get_migration_script(v)
+            except FileNotFoundError:
+                print(f"Warning: Migration script for '{v}' missing locally. Skipping.")
+                continue
 
-        with connection:
-            connection.executescript(script.up_path.read_text(encoding="utf-8"))
-            connection.execute(
-                f"INSERT INTO {_SCHEMA_MIGRATIONS_TABLE} (version) VALUES (?);",
-                (version,),
-            )
-        return True
+            with connection:
+                connection.executescript(script.up_path.read_text(encoding="utf-8"))
+                connection.execute(
+                    f"INSERT INTO {_SCHEMA_MIGRATIONS_TABLE} (version) VALUES (?);",
+                    (v,),
+                )
+                print(f"Applied migration: {v}")
+                applied_count += 1
+        if return_count:
+            return applied_count
+        return applied_count > 0
     finally:
         connection.close()
 
 
 def rollback_schema_migration(
     database_url: str | None = None,
-    version: str = MIGRATION_VERSION,
-) -> bool:
+    version: str | None = None,
+    *,
+    return_count: bool = False,
+) -> bool | int:
     resolved_url = resolve_database_url(database_url)
-    script = get_migration_script(version)
     connection = open_sqlite_connection(resolved_url)
 
     try:
         _ensure_migrations_table(connection)
-        if not _is_migration_applied(connection, version):
+        if version:
+            versions_to_rollback = [version]
+        else:
+            cursor = connection.execute(
+                f"SELECT version FROM {_SCHEMA_MIGRATIONS_TABLE} ORDER BY applied_at DESC, version DESC"
+            )
+            versions_to_rollback = [str(row["version"]) for row in cursor.fetchall()]
+
+        if not versions_to_rollback:
+            if return_count:
+                return 0
             return False
 
-        with connection:
-            connection.executescript(script.down_path.read_text(encoding="utf-8"))
-            connection.execute(
-                f"DELETE FROM {_SCHEMA_MIGRATIONS_TABLE} WHERE version = ?;",
-                (version,),
-            )
-        return True
+        rolled_back = 0
+        for migration_version in versions_to_rollback:
+            if not _is_migration_applied(connection, migration_version):
+                continue
+
+            script = get_migration_script(migration_version)
+            with connection:
+                connection.executescript(script.down_path.read_text(encoding="utf-8"))
+                connection.execute(
+                    f"DELETE FROM {_SCHEMA_MIGRATIONS_TABLE} WHERE version = ?;",
+                    (migration_version,),
+                )
+                print(f"Rolled back migration: {migration_version}")
+                rolled_back += 1
+
+        if return_count:
+            return rolled_back
+        return rolled_back > 0
     finally:
         connection.close()
 
 
 def get_migration_status(
     database_url: str | None = None,
-    version: str = MIGRATION_VERSION,
-) -> dict[str, str]:
+) -> list[dict[str, str]]:
     resolved_url = resolve_database_url(database_url)
     db_path = resolve_sqlite_path(resolved_url)
 
     if str(db_path) != ":memory:" and not db_path.exists():
-        return {
-            "database": str(db_path),
-            "migration": version,
-            "applied": "no",
-            "database_exists": "no",
-        }
+        return []
 
     connection = open_sqlite_connection(resolved_url)
+    _ensure_migrations_table(connection)
+    
+    results = []
     try:
-        applied = _is_migration_applied(connection, version)
+        for v in MIGRATION_VERSIONS:
+            applied = _is_migration_applied(connection, v)
+            results.append({
+                "version": v,
+                "applied": "yes" if applied else "no"
+            })
     finally:
         connection.close()
-
-    return {
-        "database": str(db_path),
-        "migration": version,
-        "applied": "yes" if applied else "no",
-        "database_exists": "yes",
-    }
+    return results
 
 
 def run_cli(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="StoryHub SQLite migration runner")
     parser.add_argument("command", choices=["up", "down", "status"], help="Migration command")
+    parser.add_argument(
+        "--version",
+        dest="version",
+        default=None,
+        help="Specific version for up/down command.",
+    )
     parser.add_argument(
         "--database-url",
         dest="database_url",
@@ -185,17 +233,38 @@ def run_cli(argv: Sequence[str] | None = None) -> int:
 
     try:
         if args.command == "up":
-            changed = apply_schema_migration(database_url=args.database_url)
-            print("Migration applied." if changed else "Migration already applied.")
+            applied = apply_schema_migration(
+                database_url=args.database_url,
+                version=args.version,
+                return_count=True,
+            )
+            if applied > 0:
+                print(f"Successfully applied {applied} migration(s).")
+            else:
+                print("No new migrations to apply.")
         elif args.command == "down":
-            changed = rollback_schema_migration(database_url=args.database_url)
-            print("Migration rolled back." if changed else "Migration was not applied.")
+            rolled = rollback_schema_migration(
+                database_url=args.database_url,
+                version=args.version,
+                return_count=True,
+            )
+            if rolled > 0:
+                print("Rollback successful.")
+            else:
+                print("No migration found to rollback.")
         else:
-            status = get_migration_status(database_url=args.database_url)
-            for key, value in status.items():
-                print(f"{key}: {value}")
+            statuses = get_migration_status(database_url=args.database_url)
+            print(f"{'Version':<30} | {'Applied':<10}")
+            print("-" * 45)
+            for s in statuses:
+                print(f"{s['version']:<30} | {s['applied']:<10}")
 
         return 0
     except Exception as exc:
         print(f"Migration command failed: {exc}")
         return 1
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(run_cli())

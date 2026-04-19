@@ -5,15 +5,23 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette import status
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api.websocket import websocket_router
 from app.api.v1.router import api_v1_router
 from app.api.v1.schemas import ErrorDetail, error_response
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.logging import configure_logging
 from app.db.runtime_schema import ensure_runtime_tables
+from app.services import (
+    EventPublisher,
+    RealtimeMetrics,
+    WebSocketConnectionManager,
+    ensure_storage_tree,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +40,25 @@ def _http_detail_to_message(detail: object, fallback: str) -> str:
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(settings.log_level)
+    app.state.realtime_metrics = RealtimeMetrics()
+    app.state.websocket_manager = WebSocketConnectionManager(
+        max_connections=settings.ws_max_connections,
+        message_size_limit_kb=settings.ws_message_size_limit_kb,
+        metrics=app.state.realtime_metrics,
+    )
+    app.state.event_publisher = EventPublisher(
+        app.state.websocket_manager,
+        metrics=app.state.realtime_metrics,
+    )
     await ensure_runtime_tables()
-    yield
+    try:
+        yield
+    finally:
+        await app.state.websocket_manager.notify_shutdown()
+        await app.state.event_publisher.shutdown()
 
 
 def create_app() -> FastAPI:
@@ -58,6 +80,10 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    storage_root = ensure_storage_tree().parent
+    app.mount("/storage", StaticFiles(directory=str(storage_root)), name="storage")
+
+    app.include_router(websocket_router)
     app.include_router(api_v1_router, prefix="/api/v1")
 
     @app.exception_handler(AppError)

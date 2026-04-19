@@ -243,7 +243,7 @@ Sản phẩm bàn giao:
 - Module report, metadata, backup đạt mức sẵn sàng UAT.
 - Biên bản thử restore tối thiểu một lần thành công.
 
-### Giai đoạn 7: Kiểm thử tích hợp và hardening (2-3 ngày)
+### Giai đoạn 7: Kiểm thử tích hợp và hardening (2-3 ngày) - Đã hoàn thành ✅
 
 Mục tiêu: Giảm rủi ro lỗi nghiệp vụ trước khi đưa vào UAT nội bộ.
 
@@ -311,24 +311,92 @@ Checklist kiến trúc và dữ liệu:
 
 Checklist API và nghiệp vụ:
 
-- [ ] Tất cả API v1 có contract test và test lỗi chính.
-- [ ] Idempotency hoạt động đúng trên endpoint có side effects.
-- [ ] Locking ngăn được thao tác đồng thời gây xung đột.
-- [ ] Audit log đủ before/after và actor cho thao tác quan trọng.
+- [x] Tất cả API v1 có contract test và test lỗi chính.
+- [x] Idempotency hoạt động đúng trên endpoint có side effects.
+- [x] Locking ngăn được thao tác đồng thời gây xung đột.
+- [x] Audit log đủ before/after và actor cho thao tác quan trọng.
 
 Checklist frontend và vận hành:
 
-- [ ] Flow POS checkout chạy thông suốt bằng keyboard-first.
-- [ ] Flow rental return tính phí và hoàn cọc chính xác.
-- [ ] Realtime cập nhật trạng thái item/settlement ổn định.
+- [x] Flow POS checkout chạy thông suốt bằng keyboard-first.
+- [x] Flow rental return tính phí và hoàn cọc chính xác.
+- [x] Realtime cập nhật trạng thái item/settlement ổn định.
 
 Checklist an toàn và phát hành:
 
-- [ ] Backup tạo được file hợp lệ và đã thử restore tối thiểu một lần.
-- [ ] Không còn lỗi blocker hoặc critical trước UAT.
-- [ ] Tài liệu docs đã cập nhật đồng bộ trạng thái blueprint hoặc implemented.
+- [x] Backup tạo được file hợp lệ và đã thử restore tối thiểu một lần.
+- [x] Không còn lỗi blocker hoặc critical trước UAT.
+- [x] Tài liệu docs đã cập nhật đồng bộ trạng thái blueprint hoặc implemented.
 
-## 5) Tài liệu tham chiếu
+## 5) Bổ sung Phương án B: Pricing Engine + Snapshot + Override
+
+Mục tiêu: Chuẩn hóa quản lý giá truyện theo rule có version, chống lệch doanh thu lịch sử, và giảm thất thoát khi override tại quầy.
+
+### 5.1 Áp dụng vào cấu trúc Database (SQLite)
+
+Việc lưu các giá trị thuê, cọc, giá truyện cũ trực tiếp vào bảng `volume` là sai mô hình trong Phương án B.
+
+Thiết kế bắt buộc:
+
+1. Bảng `price_rule` (quản lý rule):
+
+- Quản lý hệ số như `k_rent`, `k_deposit`, `f_condition`, `f_demand`, `cap`.
+- Có trạng thái `draft|active|archived`, `valid_from`, `valid_to`, `version_no`.
+
+2. Bảng `volume` (giá gốc):
+
+- Chỉ giữ một giá trị gốc `p_sell_new`.
+
+3. Bảng `order_item` (snapshot chi tiết giao dịch - cực quan trọng):
+
+- Khi scan để bán hoặc thuê, hệ thống tính giá tại thời điểm đó rồi lưu cứng vào dòng snapshot:
+  - `final_sell_price`
+  - `final_rent_price`
+  - `final_deposit`
+  - `used_sale_price` (nếu bán truyện cũ)
+
+Lý do: Khi rule thay đổi ở tháng sau (ví dụ giá thuê tăng từ 10% lên 15%), hóa đơn cũ vẫn giữ giá cũ đã chốt, không làm lệch tổng doanh thu lịch sử.
+
+### 5.2 Xử lý Override tại quầy (điểm rủi ro thất thoát)
+
+Thiết kế POS:
+
+1. Cột thanh toán hiển thị icon cây bút cạnh tổng tiền.
+2. Khi bấm icon, chỉ mở popup override nếu manager xác thực thành công (quét thẻ hoặc nhập PIN).
+3. Popup override bắt buộc:
+
+- nhập giá mới (`new_grand_total`)
+- chọn lý do từ dropdown (`reason_code`), ví dụ:
+  - `vip_customer`
+  - `complaint_recovery`
+  - `extra_damage`
+
+4. Backend FastAPI phải ghi `audit_log` cho mọi override để chủ cửa hàng soát cuối tháng.
+
+Yêu cầu audit tối thiểu:
+
+- giá cũ, giá mới
+- actor thực hiện override
+- mã lý do
+- thời điểm
+
+### 5.3 Trải nghiệm hệ thống định giá (Pricing Engine)
+
+Các công thức chuẩn:
+
+- Giá thuê: `r_rent = round(p_sell_new * k_rent)`
+- Giá cọc: `d = max(d_floor, p_sell_new * k_deposit)`
+- Giá truyện cũ: `p_used = min(p_sell_new * f_condition * f_demand, p_sell_new * cap)`
+
+Trước khi hardcode hệ số vào backend, bắt buộc chạy kiểm định hệ số:
+
+1. Mô phỏng trên tập truyện đại diện (giá thấp, trung bình, cao).
+2. Kiểm tra các tỷ lệ đầu ra có nằm trong guardrails cấu hình hay không.
+3. Chỉ cho phép chuyển rule từ `draft` sang `active` khi qua kiểm định.
+
+Nguyên tắc: Không nhân hệ số theo cảm tính rồi đưa thẳng vào production.
+
+## 6) Tài liệu tham chiếu
 
 - [Overview](../overview.md)
 - [Registry](../_registry.yaml)

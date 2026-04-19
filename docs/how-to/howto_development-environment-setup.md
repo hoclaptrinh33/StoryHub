@@ -124,7 +124,42 @@ Cách xử lý:
 powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
 ```
 
-## 9) Tài liệu liên quan
+## 9) Test nhanh WebSocket realtime
+
+### 9.1) Cài wscat
+
+```powershell
+npm i -g wscat
+```
+
+### 9.2) Mở kết nối realtime
+
+```powershell
+wscat -c "ws://127.0.0.1:8000/ws/item-live-updates?token=cashier-demo&branch_id=main"
+```
+
+Sau khi kết nối thành công, gửi lệnh:
+
+```json
+{
+  "type": "subscribe",
+  "events": ["item_status_changed", "rental_settlement_finished"]
+}
+```
+
+### 9.3) Trigger event để kiểm tra
+
+```powershell
+curl -X POST "http://127.0.0.1:8000/api/v1/inventory/reservations" ^
+	-H "Content-Type: application/json" ^
+	-H "Authorization: Bearer cashier-demo" ^
+	-H "X-Device-Id: WEB-KIOSK-01" ^
+	-d "{\"item_id\":\"ITM-DORA01-001\",\"customer_id\":1,\"reservation_minutes\":15,\"request_id\":\"setup-ws-reserve-001\"}"
+```
+
+Nếu cấu hình đúng, terminal `wscat` sẽ nhận event `item_status_changed`.
+
+## 10) Tài liệu liên quan
 
 - [Runtime config](../config/config_storyhub-runtime.yaml)
 - [Lộ trình triển khai](./howto_project-implementation-steps.md)

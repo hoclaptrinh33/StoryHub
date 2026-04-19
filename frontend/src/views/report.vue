@@ -18,11 +18,13 @@
               <input type="date" v-model="dateTo" />
             </div>
           </div>
-          <button class="btn-refresh" @click="refreshData">
+          <button class="btn-refresh" :disabled="isRefreshing" @click="refreshData">
             <span class="material-icons" :class="{ rotating: isRefreshing }">sync</span>
           </button>
         </div>
       </div>
+
+      <p v-if="reportError" class="report-error-banner">{{ reportError }}</p>
 
       <!-- Hero Stats Grid -->
       <div class="stats-grid-premium">
@@ -159,6 +161,59 @@
         </div>
       </div>
 
+      <div class="card-glass backup-panel">
+        <div class="card-header-lux">
+          <h3>🛡️ Backup hệ thống</h3>
+          <button class="backup-btn ghost" :disabled="isBackupLoading" @click="refreshBackupStatus">
+            Làm mới trạng thái
+          </button>
+        </div>
+
+        <div class="backup-actions">
+          <button class="backup-btn primary" :disabled="isBackupLoading" @click="triggerBackup('full')">
+            Tạo Full Backup
+          </button>
+          <button
+            class="backup-btn"
+            :disabled="isBackupLoading"
+            @click="triggerBackup('incremental')"
+          >
+            Tạo Incremental
+          </button>
+        </div>
+
+        <p v-if="backupNotice" class="backup-banner success">{{ backupNotice }}</p>
+        <p v-if="backupError" class="backup-banner error">{{ backupError }}</p>
+
+        <div v-if="latestBackup" class="backup-meta-grid">
+          <div>
+            <span class="meta-label">Job ID</span>
+            <strong>{{ latestBackup.backup_job_id }}</strong>
+          </div>
+          <div>
+            <span class="meta-label">Loại</span>
+            <strong>{{ latestBackup.backup_type }}</strong>
+          </div>
+          <div>
+            <span class="meta-label">Trạng thái</span>
+            <strong>{{ latestBackup.status }}</strong>
+          </div>
+          <div>
+            <span class="meta-label">Checksum</span>
+            <strong>{{ latestBackup.checksum || '-' }}</strong>
+          </div>
+          <div>
+            <span class="meta-label">File</span>
+            <strong>{{ latestBackup.file_path || '-' }}</strong>
+          </div>
+          <div>
+            <span class="meta-label">Thời gian</span>
+            <strong>{{ formatDateTime(latestBackup.created_at) }}</strong>
+          </div>
+        </div>
+        <p v-else class="backup-empty">Chưa có backup nào được ghi nhận.</p>
+      </div>
+
       <!-- Ranking Tables Section -->
       <div class="ranking-section">
         <div class="card-glass ranking-card">
@@ -184,6 +239,9 @@
                   </td>
                   <td class="text-center"><strong>{{ c.totalTransactions }}</strong></td>
                   <td class="text-right"><span class="amount-tag">{{ formatCurrency(c.totalSpent) }}</span></td>
+                </tr>
+                <tr v-if="topCustomers.length === 0">
+                  <td colspan="3" class="text-center table-empty">Chưa có dữ liệu khách hàng trong giai đoạn đã chọn.</td>
                 </tr>
               </tbody>
             </table>
@@ -213,47 +271,236 @@
                   </td>
                   <td class="text-right"><span class="amount-tag primary">{{ formatCurrency(book.revenue) }}</span></td>
                 </tr>
+                <tr v-if="hotBooks.length === 0">
+                  <td colspan="3" class="text-center table-empty">Chưa có dữ liệu bán/thuê trong giai đoạn đã chọn.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card-glass ranking-card full-span">
+          <div class="card-header-lux">
+            <h3>🧾 Lịch sử giao dịch gần đây</h3>
+          </div>
+          <div class="table-lux">
+            <table>
+              <thead>
+                <tr>
+                  <th>Loại</th>
+                  <th>Mã GD</th>
+                  <th>Khách hàng</th>
+                  <th class="text-right">Giá trị</th>
+                  <th class="text-right">Thời gian</th>
+                  <th class="text-right">Hóa đơn</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="tx in recentTransactions" :key="tx.id">
+                  <td>
+                    <span class="tx-type" :class="tx.type === 'sale' ? 'sale' : 'rental'">
+                      {{ tx.type === "sale" ? "Bán" : "Thuê" }}
+                    </span>
+                  </td>
+                  <td>#{{ tx.reference_id }}</td>
+                  <td>{{ tx.customer_name }}</td>
+                  <td class="text-right"><span class="amount-tag primary">{{ formatCurrency(tx.amount) }}</span></td>
+                  <td class="text-right">{{ formatDateTime(tx.created_at) }}</td>
+                  <td class="text-right">
+                    <button
+                      type="button"
+                      class="btn-open-invoice"
+                      @click="openInvoiceFromTransaction(tx)"
+                    >
+                      Xem hóa đơn
+                    </button>
+                  </td>
+                </tr>
+                <tr v-if="recentTransactions.length === 0">
+                  <td colspan="6" class="text-center table-empty">Chưa có lịch sử giao dịch trong giai đoạn đã chọn.</td>
+                </tr>
               </tbody>
             </table>
           </div>
         </div>
       </div>
+
+      <BaseModal :is-open="isInvoiceModalOpen" title="Hóa đơn giao dịch" @close="closeInvoiceModal">
+        <div class="invoice-shell">
+          <div v-if="isInvoiceLoading" class="invoice-loading-state">
+            <span class="material-icons rotating">sync</span>
+            Đang tải hóa đơn...
+          </div>
+
+          <div v-else-if="invoiceError" class="invoice-error-state">
+            <span class="material-icons">error_outline</span>
+            <p>{{ invoiceError }}</p>
+          </div>
+
+          <div v-else-if="activeInvoice" class="invoice-content">
+            <div class="invoice-grid">
+              <div>
+                <span class="meta-label">Mã hóa đơn</span>
+                <strong>{{ activeInvoice.invoice_key }}</strong>
+              </div>
+              <div>
+                <span class="meta-label">Loại giao dịch</span>
+                <strong>{{ activeInvoice.transaction_type === "sale" ? "Bán" : "Thuê" }}</strong>
+              </div>
+              <div>
+                <span class="meta-label">Khách hàng</span>
+                <strong>{{ activeInvoice.customer_name }}</strong>
+              </div>
+              <div>
+                <span class="meta-label">Thời gian</span>
+                <strong>{{ formatDateTime(activeInvoice.created_at) }}</strong>
+              </div>
+            </div>
+
+            <table class="invoice-line-table">
+              <thead>
+                <tr>
+                  <th>Mã</th>
+                  <th>Tên sách</th>
+                  <th>Loại</th>
+                  <th>Đơn giá</th>
+                  <th>Cọc</th>
+                  <th>Thành tiền</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(line, index) in activeInvoice.lines" :key="`${line.item_code}-${index}`">
+                  <td>{{ line.item_code }}</td>
+                  <td>{{ line.title }}</td>
+                  <td>{{ line.transaction_kind === "sale" ? "Bán" : "Thuê" }}</td>
+                  <td>{{ formatCurrency(line.unit_price) }}</td>
+                  <td>{{ formatCurrency(line.deposit) }}</td>
+                  <td><strong>{{ formatCurrency(line.line_total) }}</strong></td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="invoice-total-lines">
+              <p><span>Tổng bán:</span> <strong>{{ formatCurrency(activeInvoice.subtotal_sales) }}</strong></p>
+              <p><span>Tổng thuê:</span> <strong>{{ formatCurrency(activeInvoice.subtotal_rentals) }}</strong></p>
+              <p><span>Tổng cọc:</span> <strong>{{ formatCurrency(activeInvoice.total_deposit) }}</strong></p>
+              <p v-if="activeInvoice.penalty_total > 0"><span>Phạt:</span> <strong>{{ formatCurrency(activeInvoice.penalty_total) }}</strong></p>
+              <p class="grand"><span>Tổng cộng:</span> <strong>{{ formatCurrency(activeInvoice.grand_total) }}</strong></p>
+            </div>
+
+            <div v-if="activeInvoice.payments.length > 0" class="invoice-payments">
+              <p class="payments-title">Thanh toán</p>
+              <ul>
+                <li v-for="payment in activeInvoice.payments" :key="`${payment.method}-${payment.amount}`">
+                  <span>{{ formatPaymentMethod(payment.method) }}</span>
+                  <strong>{{ formatCurrency(payment.amount) }}</strong>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <template #footer>
+          <button type="button" class="backup-btn" @click="closeInvoiceModal">Đóng</button>
+        </template>
+      </BaseModal>
     </div>
   </DefaultLayout>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue';
+import { computed, nextTick, onMounted, ref } from "vue";
 import DefaultLayout from '../components/layout/defaultLayout.vue';
+import BaseModal from "../components/layout/BaseModal.vue";
 import { Chart, registerables } from 'chart.js';
+import {
+  fetchCheckoutInvoice,
+  StoryHubApiError,
+  buildRequestId,
+  type CheckoutInvoicePayload,
+  createSystemBackup,
+  fetchLatestSystemBackup,
+  fetchRevenueSummaryReport,
+  type LatestBackupPayload,
+  type PosSplitPaymentMethod,
+  type ReportTopCustomer,
+  type ReportTransactionItem,
+  type RevenueTopTitle,
+} from "../services/storyhubApi";
+
 Chart.register(...registerables);
 
-// ================== DATA & STATE ==================
+type TopCustomer = {
+  id: number;
+  name: string;
+  totalTransactions: number;
+  totalSpent: number;
+};
 
-const dateFrom = ref('2026-03-01');
-const dateTo = ref('2026-04-17');
+type RecentTransaction = {
+  id: string;
+  type: "sale" | "rental";
+  reference_id: string;
+  customer_name: string;
+  amount: number;
+  created_at: string;
+};
+
+type HotBook = {
+  id: number;
+  name: string;
+  rentCount: number;
+  sellCount: number;
+  revenue: number;
+};
+
+// ================== STATE ==================
+
+const toDateInputValue = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const today = new Date();
+const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+
+const dateFrom = ref(toDateInputValue(startOfMonth));
+const dateTo = ref(toDateInputValue(today));
 const isRefreshing = ref(false);
+const reportError = ref("");
 
-const totalRevenue = ref(187500000);
-const totalRentals = ref(342);
-const totalSales = ref(156);
-const newCustomers = ref(28);
-const netProfit = ref(42500000);
-const lateReturnRate = ref(7.2);
-const lowStockItems = ref(5);
+const sellRevenue = ref(0);
+const rentalRevenue = ref(0);
+const penaltyRevenue = ref(0);
+const totalRevenue = computed(() => sellRevenue.value + rentalRevenue.value + penaltyRevenue.value);
 
-const topCustomers = ref([
-  { id: 1, name: 'Nguyễn Văn A', totalTransactions: 12, totalSpent: 3250000 },
-  { id: 2, name: 'Trần Thị B', totalTransactions: 9, totalSpent: 2780000 },
-  { id: 3, name: 'Lê Văn C', totalTransactions: 7, totalSpent: 1950000 },
-]);
+const totalRentals = ref(0);
+const totalSales = ref(0);
+const newCustomers = ref(0);
+const netProfit = computed(() => Math.round(totalRevenue.value * 0.3));
+const lateReturnRate = computed(() => {
+  if (totalRevenue.value <= 0) {
+    return 0;
+  }
+  return Number(((penaltyRevenue.value / totalRevenue.value) * 100).toFixed(1));
+});
+const lowStockItems = ref(0);
 
-const hotBooks = ref([
-  { id: 1, name: 'One Piece Tập 105', rentCount: 45, sellCount: 32, revenue: 12500000 },
-  { id: 2, name: 'Conan Tập 98', rentCount: 38, sellCount: 28, revenue: 9800000 },
-  { id: 3, name: 'Jujutsu Kaisen Tập 20', rentCount: 30, sellCount: 25, revenue: 8700000 },
-  { id: 4, name: 'Spy x Family Tập 10', rentCount: 27, sellCount: 22, revenue: 7600000 },
-]);
+const backupError = ref("");
+const backupNotice = ref("");
+const isBackupLoading = ref(false);
+const latestBackup = ref<LatestBackupPayload | null>(null);
+
+const topCustomers = ref<TopCustomer[]>([]);
+const recentTransactions = ref<RecentTransaction[]>([]);
+const isInvoiceModalOpen = ref(false);
+const isInvoiceLoading = ref(false);
+const invoiceError = ref("");
+const activeInvoice = ref<CheckoutInvoicePayload | null>(null);
+
+const hotBooks = ref<HotBook[]>([]);
 
 // Chart References
 let charts: Chart[] = [];
@@ -268,12 +515,193 @@ const formatCurrency = (value: number) => {
   return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(value);
 };
 
+const formatDateTime = (value?: string | null) => {
+  if (!value) {
+    return "-";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString("vi-VN");
+};
+
+const formatPaymentMethod = (method: PosSplitPaymentMethod) => {
+  if (method === "cash") {
+    return "Tiền mặt";
+  }
+  if (method === "bank_transfer") {
+    return "Chuyển khoản";
+  }
+  if (method === "card") {
+    return "Thẻ";
+  }
+  return "Ví điện tử";
+};
+
+const toUtcIsoRange = (dateValue: string, endOfDay: boolean) => {
+  const normalized = dateValue.trim();
+  if (!normalized) {
+    return "";
+  }
+  return endOfDay
+    ? `${normalized}T23:59:59Z`
+    : `${normalized}T00:00:00Z`;
+};
+
+const toHotBooks = (topSellTitles: RevenueTopTitle[], topRentTitles: RevenueTopTitle[]) => {
+  const map = new Map<string, HotBook>();
+
+  const ensure = (title: string) => {
+    const key = title.trim();
+    if (!map.has(key)) {
+      map.set(key, {
+        id: map.size + 1,
+        name: key,
+        rentCount: 0,
+        sellCount: 0,
+        revenue: 0,
+      });
+    }
+    return map.get(key)!;
+  };
+
+  for (const item of topSellTitles) {
+    const entry = ensure(item.title);
+    entry.sellCount = item.qty;
+    entry.revenue += item.revenue;
+  }
+
+  for (const item of topRentTitles) {
+    const entry = ensure(item.title);
+    entry.rentCount = item.qty;
+    entry.revenue += item.revenue;
+  }
+
+  return Array.from(map.values())
+    .sort((a, b) => b.revenue - a.revenue || b.sellCount + b.rentCount - (a.sellCount + a.rentCount))
+    .slice(0, 5)
+    .map((item, index) => ({ ...item, id: index + 1 }));
+};
+
+const toTopCustomers = (rows: ReportTopCustomer[]) => {
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    totalTransactions: row.total_transactions,
+    totalSpent: row.total_spent,
+  }));
+};
+
+const toRecentTransactions = (rows: ReportTransactionItem[]) => {
+  return rows.map((row) => ({
+    id: `${row.transaction_type}-${row.reference_id}`,
+    type: row.transaction_type,
+    reference_id: row.reference_id,
+    customer_name: row.customer_name,
+    amount: row.amount,
+    created_at: row.created_at,
+  }));
+};
+
+const getApiErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof StoryHubApiError) {
+    return error.message;
+  }
+  return fallback;
+};
+
 const refreshData = async () => {
+  reportError.value = "";
+
+  if (dateFrom.value > dateTo.value) {
+    reportError.value = "Khoảng ngày báo cáo không hợp lệ.";
+    return;
+  }
+
   isRefreshing.value = true;
-  // Giả lập loading
-  await new Promise(r => setTimeout(r, 800));
-  updateCharts();
-  isRefreshing.value = false;
+  try {
+    const payload = await fetchRevenueSummaryReport({
+      from_date: toUtcIsoRange(dateFrom.value, false),
+      to_date: toUtcIsoRange(dateTo.value, true),
+      group_by: "day",
+      include_top_titles: true,
+      include_inventory_alert: true,
+      request_id: buildRequestId("report-revenue-summary"),
+    });
+
+    sellRevenue.value = payload.sell_revenue;
+    rentalRevenue.value = payload.rental_revenue;
+    penaltyRevenue.value = payload.penalty_revenue;
+
+    totalSales.value = payload.sold_items;
+    totalRentals.value = payload.rented_items;
+    newCustomers.value = payload.new_customers;
+    lowStockItems.value = payload.inventory_alerts.length;
+    hotBooks.value = toHotBooks(payload.top_sell_titles, payload.top_rent_titles);
+    topCustomers.value = toTopCustomers(payload.top_customers);
+    recentTransactions.value = toRecentTransactions(payload.recent_transactions);
+
+    await nextTick();
+    updateCharts();
+  } catch (error: unknown) {
+    reportError.value = getApiErrorMessage(error, "Không thể tải dữ liệu báo cáo.");
+  } finally {
+    isRefreshing.value = false;
+  }
+};
+
+const refreshBackupStatus = async () => {
+  backupError.value = "";
+  try {
+    latestBackup.value = await fetchLatestSystemBackup();
+  } catch (error: unknown) {
+    if (error instanceof StoryHubApiError && error.code === "BACKUP_NOT_FOUND") {
+      latestBackup.value = null;
+      return;
+    }
+    backupError.value = getApiErrorMessage(error, "Không thể đọc trạng thái backup gần nhất.");
+  }
+};
+
+const triggerBackup = async (backupType: "full" | "incremental") => {
+  backupError.value = "";
+  backupNotice.value = "";
+  isBackupLoading.value = true;
+  try {
+    const payload = await createSystemBackup({
+      backup_type: backupType,
+      request_id: buildRequestId(`backup-${backupType}`),
+    });
+    backupNotice.value = `Đã tạo ${payload.backup_job_id} (${backupType}) thành công.`;
+    await refreshBackupStatus();
+  } catch (error: unknown) {
+    backupError.value = getApiErrorMessage(error, "Không thể tạo backup ở thời điểm hiện tại.");
+  } finally {
+    isBackupLoading.value = false;
+  }
+};
+
+const closeInvoiceModal = () => {
+  isInvoiceModalOpen.value = false;
+  isInvoiceLoading.value = false;
+  invoiceError.value = "";
+  activeInvoice.value = null;
+};
+
+const openInvoiceFromTransaction = async (tx: RecentTransaction) => {
+  isInvoiceModalOpen.value = true;
+  isInvoiceLoading.value = true;
+  invoiceError.value = "";
+  activeInvoice.value = null;
+
+  try {
+    activeInvoice.value = await fetchCheckoutInvoice(tx.type, tx.reference_id, "manager-demo");
+  } catch (error: unknown) {
+    invoiceError.value = getApiErrorMessage(error, "Không thể tải hóa đơn cho giao dịch này.");
+  } finally {
+    isInvoiceLoading.value = false;
+  }
 };
 
 const updateCharts = () => {
@@ -284,7 +712,14 @@ const updateCharts = () => {
   // Common font config
   const fontConfig = { family: "'Plus Jakarta Sans', sans-serif", weight: 600 };
 
-  // 1. Line Chart: Revenue
+  const chartRevenueSeries = [
+    sellRevenue.value,
+    rentalRevenue.value,
+    penaltyRevenue.value,
+    totalRevenue.value,
+  ];
+
+  // 1. Line Chart: Revenue overview
   if (revenueChartRef.value) {
     const ctx = revenueChartRef.value.getContext('2d');
     if (ctx) {
@@ -295,10 +730,10 @@ const updateCharts = () => {
       const c = new Chart(ctx, {
         type: 'line',
         data: {
-          labels: ['10/4', '11/4', '12/4', '13/4', '14/4', '15/4', '16/4'],
+          labels: ['Bán', 'Thuê', 'Phạt', 'Tổng'],
           datasets: [{
-            label: 'Doanh thu',
-            data: [12500000, 18200000, 14700000, 21000000, 19800000, 23500000, 27800000],
+            label: 'Doanh thu tổng hợp',
+            data: chartRevenueSeries,
             borderColor: '#2563eb',
             borderWidth: 4,
             pointBackgroundColor: '#fff',
@@ -339,13 +774,14 @@ const updateCharts = () => {
 
   // 2. Bar Chart: Top Selling
   if (topSellingChartRef.value) {
+    const topBooks = hotBooks.value.slice(0, 5);
     const c = new Chart(topSellingChartRef.value, {
       type: 'bar',
       data: {
-        labels: ['O.Piece', 'Conan', 'Jujutsu', 'Spy x', 'Demon'],
+        labels: topBooks.map((item) => item.name),
         datasets: [{
-          label: 'Số bản',
-          data: [32, 28, 25, 22, 18],
+          label: 'Bản bán',
+          data: topBooks.map((item) => item.sellCount),
           backgroundColor: '#f97316',
           borderRadius: 8,
           barThickness: 24
@@ -369,10 +805,10 @@ const updateCharts = () => {
     const c = new Chart(contributionChartRef.value, {
       type: 'doughnut',
       data: {
-        labels: ['Hành động', 'Trinh thám', 'Hài hước', 'Kinh dị'],
+        labels: ['Doanh thu bán', 'Doanh thu thuê', 'Phạt'],
         datasets: [{
-          data: [78000000, 52000000, 34000000, 18000000],
-          backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444'],
+          data: [sellRevenue.value, rentalRevenue.value, penaltyRevenue.value],
+          backgroundColor: ['#3b82f6', '#10b981', '#f59e0b'],
           borderWidth: 0
         }]
       },
@@ -389,13 +825,16 @@ const updateCharts = () => {
 
   // 4. Pie: Inventory
   if (inventoryChartRef.value) {
+    const availableEstimate = Math.max(totalSales.value + totalRentals.value, 1);
+    const lowStock = Math.max(lowStockItems.value, 0);
+    const healthyStock = Math.max(availableEstimate - lowStock, 0);
     const c = new Chart(inventoryChartRef.value, {
       type: 'pie',
       data: {
-        labels: ['Mới', 'Tốt', 'Cũ', 'Lỗi'],
+        labels: ['Ổn định', 'Sắp hết hàng'],
         datasets: [{
-          data: [1240, 560, 230, 45],
-          backgroundColor: ['#22c55e', '#eab308', '#f97316', '#ef4444'],
+          data: [healthyStock, lowStock],
+          backgroundColor: ['#22c55e', '#ef4444'],
           borderWidth: 0
         }]
       },
@@ -410,10 +849,9 @@ const updateCharts = () => {
   }
 };
 
-onMounted(() => {
-  nextTick(() => {
-    updateCharts();
-  });
+onMounted(async () => {
+  await refreshData();
+  await refreshBackupStatus();
 });
 </script>
 
@@ -447,7 +885,18 @@ onMounted(() => {
 .input-with-label input { border: none; background: #f8fafc; padding: 6px 12px; border-radius: 10px; font-weight: 600; font-family: inherit; color: #1e293b; outline: none; }
 .btn-refresh { width: 44px; height: 44px; border-radius: 14px; border: none; background: #2563eb; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.3s; }
 .btn-refresh:hover { transform: rotate(180deg); background: #1d4ed8; }
+.btn-refresh:disabled { cursor: not-allowed; opacity: 0.65; transform: none; }
 .rotating { animation: spin 1s infinite linear; }
+
+.report-error-banner {
+  margin: -20px 0 24px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid #fecaca;
+  background: #fff1f2;
+  color: #b91c1c;
+  font-weight: 700;
+}
 
 /* Stats Hero */
 .stats-grid-premium { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-bottom: 40px; }
@@ -503,11 +952,251 @@ onMounted(() => {
 .ranking-card { padding: 32px 0; }
 .ranking-card .card-header-lux { padding: 0 32px; }
 
+.ranking-card.full-span {
+  grid-column: 1 / -1;
+}
+
+.backup-panel {
+  margin-bottom: 24px;
+}
+
+.backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.backup-btn {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #1e293b;
+  border-radius: 12px;
+  padding: 9px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.backup-btn:hover {
+  border-color: #94a3b8;
+}
+
+.backup-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.backup-btn.primary {
+  background: #1d4ed8;
+  color: #ffffff;
+  border-color: #1d4ed8;
+}
+
+.backup-btn.ghost {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
+}
+
+.backup-banner {
+  margin: 8px 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-weight: 700;
+}
+
+.backup-banner.success {
+  border: 1px solid #86efac;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.backup-banner.error {
+  border: 1px solid #fecaca;
+  background: #fff1f2;
+  color: #b91c1c;
+}
+
+.backup-meta-grid {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.backup-meta-grid div {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.meta-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: #64748b;
+}
+
+.backup-empty {
+  margin: 8px 0 0;
+  color: #64748b;
+  font-weight: 600;
+}
+
 .table-lux table { width: 100%; border-collapse: collapse; }
 .table-lux th { padding: 16px 32px; text-align: left; font-size: 0.75rem; color: #94a3b8; font-weight: 800; text-transform: uppercase; border-bottom: 1px solid #f1f5f9; }
 .table-lux td { padding: 16px 32px; color: #1e293b; border-bottom: 1px solid #f1f5f9; font-size: 0.95rem; }
 .table-lux tr:last-child td { border-bottom: none; }
 .table-lux tr:hover td { background: #f8fafc; }
+
+.table-empty {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.btn-open-invoice {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn-open-invoice:hover {
+  background: #dbeafe;
+}
+
+.invoice-shell {
+  min-height: 200px;
+}
+
+.invoice-loading-state,
+.invoice-error-state {
+  min-height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.invoice-error-state {
+  color: #b91c1c;
+}
+
+.invoice-error-state p {
+  margin: 0;
+}
+
+.invoice-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.invoice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.invoice-line-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.invoice-line-table th,
+.invoice-line-table td {
+  border-bottom: 1px solid #f1f5f9;
+  padding: 9px;
+}
+
+.invoice-line-table th {
+  text-align: left;
+  background: #f8fafc;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  color: #475569;
+}
+
+.invoice-total-lines {
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.invoice-total-lines p {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #334155;
+  padding: 3px 0;
+}
+
+.invoice-total-lines p.grand {
+  margin-top: 4px;
+  border-top: 1px dashed #cbd5e1;
+  padding-top: 8px;
+  color: #0f172a;
+}
+
+.invoice-payments {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.payments-title {
+  margin: 0 0 8px;
+  font-weight: 700;
+  color: #1e3a8a;
+}
+
+.invoice-payments ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.invoice-payments li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #1e3a8a;
+}
+
+.tx-type {
+  display: inline-flex;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.tx-type.sale {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.tx-type.rental {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
 
 .member-info { display: flex; align-items: center; gap: 12px; }
 .rank { padding: 4px 10px; border-radius: 8px; font-weight: 800; font-size: 0.75rem; }
@@ -529,5 +1218,7 @@ onMounted(() => {
   .analytics-row { grid-template-columns: 1fr; }
   .analytics-row.secondary { grid-template-columns: 1fr; }
   .ranking-section { grid-template-columns: 1fr; }
+  .backup-meta-grid { grid-template-columns: 1fr; }
+  .invoice-grid { grid-template-columns: 1fr; }
 }
 </style>

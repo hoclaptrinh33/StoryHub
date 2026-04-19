@@ -19,6 +19,7 @@ Tài liệu này gom 3 lớp bảo vệ quan trọng:
 
 - Được: toàn bộ quyền cashier
 - Được thêm: hoàn tiền, chỉnh giá, backup thủ công, xem báo cáo tổng hợp
+- Override giá tại quầy chỉ hợp lệ khi xác thực manager bằng PIN hoặc thẻ
 
 ### owner/admin
 
@@ -40,7 +41,24 @@ Các hành động bắt buộc audit:
 - tạo/gia hạn/kết toán phiếu thuê
 - đổi trạng thái item
 - đổi giá và rule phạt
+- override giá tại POS (ghi rõ giá cũ, giá mới, lý do)
 - thao tác backup/restore
+
+## 3.1) Chính sách override giá tại quầy
+
+- Vị trí thao tác: panel thanh toán POS, icon cây bút cạnh tổng tiền
+- Chỉ manager được xác thực để mở popup override
+- Khi override phải có:
+  - `reason_code` bắt buộc từ danh sách chuẩn
+  - `reason_note` tùy chọn nếu cần diễn giải chi tiết
+- Cashier không có quyền xác nhận override bằng tài khoản của mình
+- Mọi override phải ghi `audit_log.action = POS_PRICE_OVERRIDE`
+- Dữ liệu audit tối thiểu cho override:
+  - `before_json.grand_total`
+  - `after_json.grand_total`
+  - `after_json.override_reason_code`
+  - `after_json.override_actor_user_id`
+  - `after_json.order_id`
 
 ## 4) Locking strategy
 

@@ -13,11 +13,13 @@ from app.db.runtime_schema import ensure_runtime_tables
 from app.db.seed import seed_database
 from app.db.session import engine
 from app.main import app
+from tests.auth_helpers import build_auth_headers
 
 _SEED_RESET_ORDER = (
     "audit_log",
     "backup_job",
     "metadata_cache",
+    "order_item",
     "rental_settlement",
     "rental_item",
     "rental_contract",
@@ -27,6 +29,7 @@ _SEED_RESET_ORDER = (
     "reservation",
     "item",
     "customer",
+    "price_rule",
     "volume",
     "title",
 )
@@ -66,8 +69,4 @@ def client() -> Iterator[TestClient]:
 
 
 def auth_headers(token: str) -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {token}",
-        "X-Request-Id": "test-header-request-id",
-        "X-Device-Id": "TEST-KIOSK-01",
-    }
+    return build_auth_headers(token, include_request_id=True)

@@ -2,15 +2,14 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from tests.auth_helpers import build_auth_headers
+
 
 def _auth_headers(token: str | None) -> dict[str, str]:
-    headers = {"X-Device-Id": "TEST-KIOSK-01"}
-    if token is not None:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
+    return build_auth_headers(token)
 
 
-def test_auth_fallback_inventory(client: TestClient) -> None:
+def test_auth_missing_token_inventory(client: TestClient) -> None:
     response = client.post(
         "/api/v1/inventory/reservations",
         json={
@@ -22,9 +21,10 @@ def test_auth_fallback_inventory(client: TestClient) -> None:
         headers=_auth_headers(None),
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 401
     payload = response.json()
-    assert payload["success"] is True
+    assert payload["success"] is False
+    assert payload["error"]["code"] == "AUTH_MISSING_TOKEN"
 
 
 def test_auth_invalid_token_inventory(client: TestClient) -> None:

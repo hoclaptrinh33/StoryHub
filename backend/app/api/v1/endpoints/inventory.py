@@ -1,24 +1,30 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import uuid
 from datetime import timedelta
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Path, Request
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
-import uuid
 
-from app.api.v1.dependencies import AuthContext, get_auth_context
+from app.api.v1.dependencies import AuthContext, get_auth_context, get_event_publisher
 from app.api.v1.endpoints._common import get_request_meta, to_iso_z, utc_now
 from app.api.v1.schemas import ResponseEnvelope, success_response
 from app.core.errors import AppError
 from app.db.session import get_db_session
 from app.services import (
+    EventPublisher,
     compute_sell_price,
     get_cached_response,
+    is_remote_image_url,
+    save_cover_from_base64,
+    save_cover_from_url,
     store_cached_response,
     write_audit_log,
 )
@@ -44,11 +50,20 @@ class ReserveInventoryItemPayload(BaseModel):
 
 class InventoryItemListItem(BaseModel):
     id: str  # backendItemId
+    volume_id: int | None = None
     name: str  # title name + volume number
     code: str  # sku or barcode
     price: int
+    stock_quantity: int | None = None
     status: str
     type: str
+
+
+class InventoryItemStatusPayload(BaseModel):
+    item_id: str
+    status: str
+    changed_at: str
+    item_type: Literal["rental", "retail"]
 
 class ConvertToRentalRequest(BaseModel):
     volume_id: int = Field(gt=0)
@@ -60,6 +75,59 @@ class ConvertToRentalPayload(BaseModel):
     converted_quantity: int
     new_skus: list[str]
 
+class CreateVolumeRequest(BaseModel):
+    title_name: str = Field(min_length=1)
+    author: str = Field(default="Unknown")
+    description: str | None = Field(default=None, max_length=5000)
+    cover_url: str | None = Field(default=None, max_length=500)
+    categories: list[str] = Field(default_factory=list)
+    page_count: int | None = Field(default=None, ge=1)
+    published_date: str | None = Field(default=None, max_length=50)
+    volume_number: int = Field(gt=0)
+    isbn: str = Field(min_length=5, max_length=20)
+    retail_stock: int = Field(ge=0)
+    p_sell_new: int = Field(default=0, ge=0)
+    request_id: str = Field(min_length=6, max_length=128)
+
+class CreateVolumePayload(BaseModel):
+    volume_id: int
+    title_id: int
+    isbn: str
+    retail_stock: int
+
+
+class UpdateVolumePriceRequest(BaseModel):
+    p_sell_new: int = Field(ge=1000, le=100_000_000)
+    request_id: str = Field(min_length=6, max_length=128)
+
+
+class UpdateVolumePricePayload(BaseModel):
+    volume_id: int
+    isbn: str
+    old_price: int
+    new_price: int
+    updated_at: str
+
+
+class ImportCoverRequest(BaseModel):
+    isbn: str = Field(min_length=5, max_length=20)
+    image_url: str | None = Field(default=None, max_length=2000)
+    image_base64: str | None = Field(default=None, max_length=12_000_000)
+    request_id: str = Field(min_length=6, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_source(self) -> ImportCoverRequest:
+        has_url = bool((self.image_url or "").strip())
+        has_base64 = bool((self.image_base64 or "").strip())
+        if has_url == has_base64:
+            raise ValueError("Chi duoc truyen mot nguon anh: image_url hoac image_base64.")
+        return self
+
+
+class ImportCoverPayload(BaseModel):
+    cover_url: str
+    source: Literal["url", "base64"]
+
 
 @router.post(
     "/reservations",
@@ -70,6 +138,7 @@ async def reserve_inventory_item(
     request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ) -> ResponseEnvelope[ReserveInventoryItemPayload] | dict[str, object]:
     auth.require_role("cashier", "manager")
     auth.require_scope("inventory:reserve")
@@ -103,13 +172,13 @@ async def reserve_inventory_item(
         if customer_row is None:
             raise AppError(
                 code="CUSTOMER_NOT_FOUND",
-                message="Khong tim thay khach hang cho yeu cau giu cho.",
+                message="Không tìm thấy thông tin khách hàng để thực hiện yêu cầu giữ chỗ.",
                 status_code=status.HTTP_404_NOT_FOUND,
             )
         if int(customer_row["blacklist_flag"]) == 1:
             raise AppError(
                 code="CUSTOMER_BLACKLISTED",
-                message="Khach hang dang nam trong danh sach blacklist.",
+                message="Khách hàng này hiện đang nằm trong danh sách hạn chế (Blacklist). Không thể thực hiện giữ chỗ.",
                 status_code=status.HTTP_403_FORBIDDEN,
             )
 
@@ -172,7 +241,7 @@ async def reserve_inventory_item(
         if lock_result.rowcount != 1:
             raise AppError(
                 code="ITEM_NOT_AVAILABLE",
-                message="Item khong o trang thai san sang de giu cho.",
+                message="Sản phẩm hiện không ở trạng thái sẵn sàng để thực hiện giữ chỗ.",
                 status_code=status.HTTP_409_CONFLICT,
             )
 
@@ -239,6 +308,16 @@ async def reserve_inventory_item(
         )
     )
 
+    await event_publisher.publish_item_status_changed(
+        item_id=payload.item_id,
+        old_status="available",
+        new_status="reserved",
+        changed_at=now_iso,
+        source_api="inventory_reserve_item_v1",
+        changed_by=auth.user_id,
+        branch_id=auth.branch_id,
+    )
+
     try:
         async with session.begin():
             await store_cached_response(
@@ -271,24 +350,34 @@ async def list_inventory_items(
 
     query_str = """
         SELECT
+            v.id AS volume_id,
             v.isbn AS item_id,
             t.name AS title_name,
             v.volume_number,
             v.isbn AS isbn,
-            'available' AS status,
+            v.p_sell_new AS p_sell_new,
+            v.retail_stock AS stock_quantity,
+            CASE 
+                WHEN v.p_sell_new <= 0 THEN 'unready'
+                WHEN v.retail_stock > 0 THEN 'available'
+                ELSE 'out_of_stock'
+            END AS status,
             100 AS condition_level,
             'retail' AS type
         FROM volume v
         JOIN title t ON v.title_id = t.id
-        WHERE v.deleted_at IS NULL AND v.retail_stock > 0 AND v.isbn IS NOT NULL
+        WHERE v.deleted_at IS NULL AND v.isbn IS NOT NULL
         
         UNION ALL
         
         SELECT
+            v.id AS volume_id,
             i.id AS item_id,
             t.name AS title_name,
             v.volume_number,
             v.isbn AS isbn,
+            v.p_sell_new AS p_sell_new,
+            1 AS stock_quantity,
             i.status,
             i.condition_level,
             'rental' AS type
@@ -311,9 +400,18 @@ async def list_inventory_items(
     items = [
         InventoryItemListItem(
             id=row["item_id"],
+            volume_id=row["volume_id"],
             name=f"{row['title_name']} Tập {row['volume_number']}",
             code=row["isbn"] or row["item_id"],
-            price=compute_sell_price(condition_level=int(row["condition_level"])),
+            price=compute_sell_price(
+                condition_level=int(row["condition_level"]),
+                p_sell_new=int(row["p_sell_new"]),
+            ),
+            stock_quantity=(
+                int(row["stock_quantity"])
+                if row.get("stock_quantity") is not None
+                else None
+            ),
             status=row["status"],
             type=row["type"],
         )
@@ -321,6 +419,76 @@ async def list_inventory_items(
     ]
 
     return success_response(items)
+
+
+@router.get(
+    "/items/{item_id}/status",
+    response_model=ResponseEnvelope[InventoryItemStatusPayload],
+)
+async def get_inventory_item_status(
+    item_id: str = Path(min_length=1, max_length=64),
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[InventoryItemStatusPayload]:
+    auth.require_role("cashier", "manager", "owner")
+    auth.require_scope("inventory:read")
+
+    rental_item_result = await session.execute(
+        text(
+            """
+            SELECT id, status, updated_at
+            FROM item
+            WHERE id = :item_id AND deleted_at IS NULL;
+            """
+        ),
+        {"item_id": item_id},
+    )
+    rental_item = rental_item_result.mappings().first()
+    if rental_item is not None:
+        return success_response(
+            InventoryItemStatusPayload(
+                item_id=str(rental_item["id"]),
+                status=str(rental_item["status"]),
+                changed_at=str(rental_item["updated_at"]),
+                item_type="rental",
+            )
+        )
+
+    retail_item_result = await session.execute(
+        text(
+            """
+            SELECT
+                isbn,
+                retail_stock,
+                p_sell_new,
+                updated_at
+            FROM volume
+            WHERE isbn = :item_id AND deleted_at IS NULL;
+            """
+        ),
+        {"item_id": item_id},
+    )
+    retail_item = retail_item_result.mappings().first()
+    if retail_item is not None:
+        if int(retail_item["p_sell_new"]) <= 0:
+            retail_status = "unready"
+        else:
+            retail_status = "available" if int(retail_item["retail_stock"]) > 0 else "out_of_stock"
+            
+        return success_response(
+            InventoryItemStatusPayload(
+                item_id=str(retail_item["isbn"]),
+                status=retail_status,
+                changed_at=str(retail_item["updated_at"]),
+                item_type="retail",
+            )
+        )
+
+    raise AppError(
+        code="ITEM_NOT_FOUND",
+        message="Không tìm thấy sản phẩm yêu cầu trong hệ thống dữ liệu.",
+        status_code=status.HTTP_404_NOT_FOUND,
+    )
 
 @router.post("/convert-to-rental", response_model=ResponseEnvelope[ConvertToRentalPayload])
 async def convert_to_rental(
@@ -346,10 +514,10 @@ async def convert_to_rental(
         )
         volume_row = vol_result.mappings().first()
         if not volume_row:
-            raise AppError(code="VOLUME_NOT_FOUND", message="Khong tim thay tap truyen.", status_code=404)
+            raise AppError(code="VOLUME_NOT_FOUND", message="Không tìm thấy tập truyện tương ứng với ID đã cung cấp.", status_code=404)
             
         if volume_row["retail_stock"] < payload.quantity:
-            raise AppError(code="INSUFFICIENT_STOCK", message="Ton kho khong du de chuyen doi sang thue.", status_code=409)
+            raise AppError(code="INSUFFICIENT_STOCK", message="Số lượng tồn kho hiện tại không đủ để thực hiện chuyển đổi sang hàng thuê.", status_code=409)
 
         await session.execute(
             text("UPDATE volume SET retail_stock = retail_stock - :qty, updated_at = CURRENT_TIMESTAMP WHERE id = :vid"),
@@ -378,5 +546,394 @@ async def convert_to_rental(
     except IntegrityError:
         pass
         
+    return envelope
+
+
+@router.post("/covers/import", response_model=ResponseEnvelope[ImportCoverPayload])
+async def import_cover_image(
+    payload: ImportCoverRequest,
+    request: Request,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[ImportCoverPayload] | dict[str, object]:
+    auth.require_role("manager")
+    auth.require_scope("inventory:write")
+
+    cached = await get_cached_response(
+        session,
+        scope="inventory.import_cover",
+        request_id=payload.request_id,
+    )
+    if cached is not None:
+        return cached.payload
+
+    if session.in_transaction():
+        await session.rollback()
+
+    source: Literal["url", "base64"] = "url"
+    try:
+        if (payload.image_url or "").strip():
+            source = "url"
+            cover_url = await asyncio.to_thread(
+                save_cover_from_url,
+                payload.isbn,
+                str(payload.image_url),
+            )
+        else:
+            source = "base64"
+            cover_url = await asyncio.to_thread(
+                save_cover_from_base64,
+                payload.isbn,
+                str(payload.image_base64),
+            )
+    except ValueError as exc:
+        raise AppError(
+            code="COVER_IMPORT_FAILED",
+            message=str(exc),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        ) from exc
+
+    ip_addr, device = get_request_meta(request)
+    async with session.begin():
+        await write_audit_log(
+            session,
+            actor_user_id=auth.user_id,
+            action="INVENTORY_COVER_IMPORTED",
+            entity_type="cover",
+            entity_id=payload.isbn,
+            before=None,
+            after={
+                "isbn": payload.isbn,
+                "source": source,
+                "cover_url": cover_url,
+            },
+            ip_address=ip_addr,
+            device_id=device,
+        )
+
+    envelope = success_response(ImportCoverPayload(cover_url=cover_url, source=source))
+    try:
+        async with session.begin():
+            await store_cached_response(
+                session,
+                scope="inventory.import_cover",
+                request_id=payload.request_id,
+                status_code=status.HTTP_200_OK,
+                payload=envelope.model_dump(),
+            )
+    except IntegrityError:
+        await session.rollback()
+        cached = await get_cached_response(
+            session,
+            scope="inventory.import_cover",
+            request_id=payload.request_id,
+        )
+        if cached is not None:
+            return cached.payload
+        raise
+
+    return envelope
+
+@router.post("/volumes", response_model=ResponseEnvelope[CreateVolumePayload])
+async def create_volume(
+    payload: CreateVolumeRequest,
+    request: Request,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[CreateVolumePayload] | dict[str, object]:
+    auth.require_role("manager")
+    auth.require_scope("inventory:write")
+
+    normalized_title_name = payload.title_name.strip()
+    normalized_author = payload.author.strip() or "Unknown"
+    normalized_description = (payload.description or "").strip()
+    normalized_cover_url = (payload.cover_url or "").strip()
+    normalized_categories = [
+        category.strip()
+        for category in payload.categories
+        if isinstance(category, str) and category.strip()
+    ]
+    normalized_genre = ", ".join(normalized_categories)
+    normalized_published_date = (payload.published_date or "").strip()
+    normalized_page_count = payload.page_count if payload.page_count and payload.page_count > 0 else None
+
+    if normalized_cover_url and is_remote_image_url(normalized_cover_url):
+        try:
+            normalized_cover_url = await asyncio.to_thread(
+                save_cover_from_url,
+                payload.isbn,
+                normalized_cover_url,
+            )
+        except ValueError as exc:
+            raise AppError(
+                code="COVER_IMPORT_FAILED",
+                message=str(exc),
+                status_code=status.HTTP_400_BAD_REQUEST,
+            ) from exc
+
+    has_extended_metadata = bool(
+        normalized_description
+        or normalized_cover_url
+        or normalized_categories
+        or normalized_page_count is not None
+        or normalized_published_date
+    )
+
+    cached = await get_cached_response(session, scope="inventory.create_volume", request_id=payload.request_id)
+    if cached is not None:
+        return cached.payload
+
+    if session.in_transaction():
+        await session.rollback()
+
+    async with session.begin():
+        title_res = await session.execute(
+            text("SELECT id FROM title WHERE name = :name COLLATE NOCASE AND deleted_at IS NULL"),
+            {"name": normalized_title_name}
+        )
+        title_row = title_res.mappings().first()
+        if title_row:
+            title_id = title_row["id"]
+            await session.execute(
+                text(
+                    """
+                    UPDATE title
+                    SET
+                        author = CASE
+                            WHEN (author IS NULL OR TRIM(author) = '' OR author = 'Unknown') AND :author <> ''
+                                THEN :author
+                            ELSE author
+                        END,
+                        description = CASE
+                            WHEN :description <> '' THEN :description
+                            ELSE description
+                        END,
+                        cover_url = CASE
+                            WHEN :cover_url <> '' THEN :cover_url
+                            ELSE cover_url
+                        END,
+                        genre = CASE
+                            WHEN :genre <> '' THEN :genre
+                            ELSE genre
+                        END,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = :title_id
+                    """
+                ),
+                {
+                    "title_id": title_id,
+                    "author": normalized_author,
+                    "description": normalized_description,
+                    "cover_url": normalized_cover_url,
+                    "genre": normalized_genre,
+                },
+            )
+        else:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO title (name, author, description, cover_url, genre)
+                    VALUES (:name, :author, :description, :cover_url, :genre)
+                    """
+                ),
+                {
+                    "name": normalized_title_name,
+                    "author": normalized_author,
+                    "description": normalized_description or None,
+                    "cover_url": normalized_cover_url or None,
+                    "genre": normalized_genre or None,
+                }
+            )
+            title_id_res = await session.execute(text("SELECT last_insert_rowid() AS value"))
+            title_id = int(title_id_res.scalar_one())
+            
+        try:
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO volume (title_id, volume_number, isbn, retail_stock, p_sell_new)
+                    VALUES (:tid, :vnum, :isbn, :stock, :price)
+                    """
+                ),
+                {
+                    "tid": title_id,
+                    "vnum": payload.volume_number,
+                    "isbn": payload.isbn,
+                    "stock": payload.retail_stock,
+                    "price": payload.p_sell_new
+                }
+            )
+            vol_id_res = await session.execute(text("SELECT last_insert_rowid() AS value"))
+            volume_id = int(vol_id_res.scalar_one())
+        except IntegrityError:
+            await session.execute(
+                text(
+                    """
+                    UPDATE volume 
+                    SET retail_stock = retail_stock + :qty, isbn = :isbn, updated_at = CURRENT_TIMESTAMP
+                    WHERE title_id = :tid AND volume_number = :vnum
+                    """
+                ),
+                {
+                    "qty": payload.retail_stock,
+                    "isbn": payload.isbn,
+                    "tid": title_id,
+                    "vnum": payload.volume_number
+                }
+            )
+            vol_id_res = await session.execute(
+                text("SELECT id FROM volume WHERE title_id = :tid AND volume_number = :vnum"),
+                {"tid": title_id, "vnum": payload.volume_number}
+            )
+            volume_id = vol_id_res.mappings().first()["id"]
+
+        if has_extended_metadata:
+            metadata_payload = {
+                "title": normalized_title_name,
+                "authors": [entry.strip() for entry in normalized_author.split(",") if entry.strip()],
+                "description": normalized_description,
+                "imageLinks": normalized_cover_url,
+                "pageCount": normalized_page_count,
+                "categories": normalized_categories,
+                "publishedDate": normalized_published_date,
+                "language": "vi",
+            }
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO metadata_cache (query_key, source, payload_json, confidence, cached_at, expire_at)
+                    VALUES (:query_key, :source, :payload_json, :confidence, CURRENT_TIMESTAMP, datetime('now', '+365 day'))
+                    ON CONFLICT(query_key)
+                    DO UPDATE SET
+                        payload_json = excluded.payload_json,
+                        confidence = excluded.confidence,
+                        cached_at = CURRENT_TIMESTAMP,
+                        expire_at = datetime('now', '+365 day')
+                    """
+                ),
+                {
+                    "query_key": f"google_books:isbn:{payload.isbn}",
+                    "source": "google_books_vi",
+                    "payload_json": json.dumps(metadata_payload, ensure_ascii=False),
+                    "confidence": 1.0,
+                },
+            )
+
+        ip_addr, device = get_request_meta(request)
+        await write_audit_log(session, actor_user_id=auth.user_id, action="INVENTORY_VOLUME_CREATED", entity_type="volume", entity_id=str(volume_id), before=None, after={"title_id": title_id, "isbn": payload.isbn, "stock": payload.retail_stock, "metadata_cached": has_extended_metadata}, ip_address=ip_addr, device_id=device)
+
+    envelope = success_response(CreateVolumePayload(volume_id=volume_id, title_id=title_id, isbn=payload.isbn, retail_stock=payload.retail_stock))
+    try:
+        async with session.begin():
+            await store_cached_response(session, scope="inventory.create_volume", request_id=payload.request_id, status_code=200, payload=envelope.model_dump())
+    except IntegrityError:
+        pass
+        
+    return envelope
+
+
+@router.patch("/volumes/{volume_id}/price", response_model=ResponseEnvelope[UpdateVolumePricePayload])
+async def update_volume_price(
+    payload: UpdateVolumePriceRequest,
+    request: Request,
+    volume_id: int = Path(gt=0),
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[UpdateVolumePricePayload] | dict[str, object]:
+    auth.require_role("manager", "owner")
+    auth.require_scope("inventory:write")
+
+    cached = await get_cached_response(
+        session,
+        scope="inventory.update_price",
+        request_id=payload.request_id,
+    )
+    if cached is not None:
+        return cached.payload
+
+    if session.in_transaction():
+        await session.rollback()
+
+    now_iso = to_iso_z(utc_now())
+    async with session.begin():
+        volume_result = await session.execute(
+            text(
+                """
+                SELECT id, isbn, p_sell_new
+                FROM volume
+                WHERE id = :volume_id
+                  AND deleted_at IS NULL;
+                """
+            ),
+            {"volume_id": volume_id},
+        )
+        volume_row = volume_result.mappings().first()
+        if volume_row is None:
+            raise AppError(
+                code="VOLUME_NOT_FOUND",
+                message="Khong tim thay tap truyen can cap nhat gia.",
+                status_code=status.HTTP_404_NOT_FOUND,
+            )
+
+        old_price = int(volume_row["p_sell_new"])
+        await session.execute(
+            text(
+                """
+                UPDATE volume
+                SET p_sell_new = :new_price,
+                    updated_at = :updated_at
+                WHERE id = :volume_id;
+                """
+            ),
+            {
+                "new_price": payload.p_sell_new,
+                "updated_at": now_iso,
+                "volume_id": volume_id,
+            },
+        )
+
+        ip_addr, device = get_request_meta(request)
+        await write_audit_log(
+            session,
+            actor_user_id=auth.user_id,
+            action="INVENTORY_VOLUME_PRICE_UPDATED",
+            entity_type="volume",
+            entity_id=str(volume_id),
+            before={"p_sell_new": old_price},
+            after={"p_sell_new": payload.p_sell_new},
+            ip_address=ip_addr,
+            device_id=device,
+        )
+
+        envelope = success_response(
+            UpdateVolumePricePayload(
+                volume_id=volume_id,
+                isbn=str(volume_row["isbn"]),
+                old_price=old_price,
+                new_price=payload.p_sell_new,
+                updated_at=now_iso,
+            )
+        )
+
+    try:
+        async with session.begin():
+            await store_cached_response(
+                session,
+                scope="inventory.update_price",
+                request_id=payload.request_id,
+                status_code=status.HTTP_200_OK,
+                payload=envelope.model_dump(),
+            )
+    except IntegrityError:
+        await session.rollback()
+        cached = await get_cached_response(
+            session,
+            scope="inventory.update_price",
+            request_id=payload.request_id,
+        )
+        if cached is not None:
+            return cached.payload
+        raise
+
     return envelope
 

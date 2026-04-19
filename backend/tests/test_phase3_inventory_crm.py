@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from tests.auth_helpers import build_auth_headers
+
 
 def _auth_headers(token: str) -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {token}",
-        "X-Device-Id": "TEST-KIOSK-01",
-    }
+    return build_auth_headers(token)
 
 
 def test_inventory_reservation_success(client: TestClient) -> None:

@@ -30,7 +30,7 @@ const remove = (id: number) => {
   notifications.value = notifications.value.filter(n => n.id !== id);
 };
 
-const addNotification = (type: 'success' | 'error' | 'warning', message: string) => {
+const addNotification = (type: 'success' | 'error' | 'warning' | 'info', message: string) => {
   const id = Date.now();
   notifications.value.push({ id, type, message });
   setTimeout(() => remove(id), 4000); // Auto-close after 4 seconds
@@ -69,6 +69,7 @@ defineExpose({ addNotification });
 .success { background: linear-gradient(135deg, #10b981, #059669); }
 .error { background: linear-gradient(135deg, #ef4444, #dc2626); }
 .warning { background: linear-gradient(135deg, #f59e0b, #d97706); }
+.info { background: linear-gradient(135deg, #3b82f6, #2563eb); }
 
 .message { flex: 1; font-size: 0.95rem; line-height: 1.4; }
 

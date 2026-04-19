@@ -10,24 +10,47 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
-from app.api.v1.dependencies import AuthContext, get_auth_context
+from app.api.v1.dependencies import (
+    AuthContext,
+    build_auth_context_from_token,
+    get_auth_context,
+    get_event_publisher,
+)
 from app.api.v1.endpoints._common import get_request_meta, parse_iso_datetime, to_iso_z, utc_now
 from app.api.v1.schemas import ResponseEnvelope, success_response
 from app.core.errors import AppError
 from app.db.session import get_db_session
 from app.services import (
+    EventPublisher,
     compute_sell_price,
     get_cached_response,
+    resolve_active_price_rule,
     store_cached_response,
     write_audit_log,
 )
 
 router = APIRouter(prefix="/pos", tags=["pos"])
+_OVERRIDE_FLOOR_RATIO = 0.7
 
 
 class SplitPaymentLine(BaseModel):
     method: Literal["cash", "bank_transfer", "e_wallet", "card"]
     amount: int = Field(gt=0)
+
+
+class CheckoutOverride(BaseModel):
+    new_grand_total: int = Field(gt=0)
+    reason_code: Literal[
+        "damaged_cover",
+        "yellow_pages",
+        "missing_insert",
+        "complaint_recovery",
+        "promo_match",
+        "other",
+    ]
+    reason_note: str | None = Field(default=None, max_length=255)
+    manager_approval_token: str = Field(min_length=3, max_length=128)
+    manager_auth_method: Literal["pin", "card"] = "pin"
 
 
 class PosOrderLine(BaseModel):
@@ -43,6 +66,7 @@ class CreatePosOrderRequest(BaseModel):
     discount_type: Literal["none", "percent", "amount"]
     discount_value: int = Field(ge=0)
     split_payments: list[SplitPaymentLine] = Field(min_length=1)
+    checkout_override: CheckoutOverride | None = None
     note: str | None = None
     request_id: str = Field(min_length=6, max_length=128)
 
@@ -61,6 +85,9 @@ class CreatePosOrderPayload(BaseModel):
     subtotal: int
     discount_total: int
     grand_total: int
+    price_rule_version: int
+    price_override_applied: bool
+    override_reason_code: str | None = None
     payment_breakdown: list[SplitPaymentLine]
     line_items: list[PosOrderLine]
 
@@ -95,12 +122,32 @@ def _calculate_discount(subtotal: int, discount_type: str, discount_value: int) 
     return min((subtotal * discount_value) // 100, subtotal)
 
 
+def _resolve_manager_approval(token: str) -> AuthContext:
+    try:
+        approval_auth = build_auth_context_from_token(token)
+    except AppError as exc:
+        raise AppError(
+            code="MANAGER_APPROVAL_REQUIRED",
+            message="Yêu cầu mã phê duyệt của Quản lý (Manager Token) không hợp lệ để thực hiện ghi đè giá.",
+            status_code=status.HTTP_403_FORBIDDEN,
+        ) from exc
+
+    if approval_auth.role not in {"manager", "owner"}:
+        raise AppError(
+            code="MANAGER_APPROVAL_REQUIRED",
+            message="Chỉ Quản lý hoặc Chủ cửa hàng mới có quyền phê duyệt thay đổi giá bán trực tiếp.",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    return approval_auth
+
+
 @router.post("/orders", response_model=ResponseEnvelope[CreatePosOrderPayload])
 async def create_pos_order(
     payload: CreatePosOrderRequest,
     request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ) -> ResponseEnvelope[CreatePosOrderPayload] | dict[str, object]:
     auth.require_role("cashier", "manager")
     auth.require_scope("pos:write")
@@ -119,19 +166,25 @@ async def create_pos_order(
     now_iso = to_iso_z(now)
 
     async with session.begin():
+        pricing_rule = await resolve_active_price_rule(session)
         item_rows: list[dict[str, object]] = []
         for item_id in payload.item_ids:
             row_result = await session.execute(
                 text(
                     """
                     SELECT
-                        id,
-                        status,
-                        reserved_by_customer_id,
-                        reservation_expire_at,
-                        condition_level
-                    FROM item
-                    WHERE id = :item_id AND deleted_at IS NULL;
+                        i.id,
+                        i.volume_id,
+                        i.status,
+                        i.reserved_by_customer_id,
+                        i.reservation_expire_at,
+                        i.condition_level,
+                        v.p_sell_new
+                    FROM item i
+                    JOIN volume v ON v.id = i.volume_id
+                    WHERE i.id = :item_id
+                      AND i.deleted_at IS NULL
+                      AND v.deleted_at IS NULL;
                     """
                 ),
                 {"item_id": item_id},
@@ -140,7 +193,7 @@ async def create_pos_order(
             if row is None:
                 raise AppError(
                     code="ITEM_NOT_AVAILABLE",
-                    message="Mot hoac nhieu item khong san sang cho giao dich ban.",
+                    message="Một hoặc nhiều sản phẩm không sẵn sàng cho giao dịch bán (có thể đã được bán hoặc thay đổi trạng thái).",
                     status_code=status.HTTP_409_CONFLICT,
                 )
 
@@ -190,16 +243,23 @@ async def create_pos_order(
             if row["status"] != "available" and not is_reserved_for_customer:
                 raise AppError(
                     code="ITEM_NOT_AVAILABLE",
-                    message="Mot hoac nhieu item khong san sang cho giao dich ban.",
+                    message="Một hoặc nhiều sản phẩm không sẵn sàng cho giao dịch bán (có thể đã được bán hoặc thay đổi trạng thái).",
                     status_code=status.HTTP_409_CONFLICT,
                 )
 
             item_rows.append(dict(row))
 
         line_items: list[PosOrderLine] = []
+        line_snapshots: list[dict[str, int | str]] = []
         subtotal = 0
         for item_row in item_rows:
-            price = compute_sell_price(condition_level=int(item_row["condition_level"]))
+            p_sell_new = int(item_row["p_sell_new"])
+            price = compute_sell_price(
+                condition_level=int(item_row["condition_level"]),
+                p_sell_new=p_sell_new,
+                used_demand_factor=pricing_rule.used_demand_factor,
+                used_cap_ratio=pricing_rule.used_cap_ratio,
+            )
             subtotal += price
             line_items.append(
                 PosOrderLine(
@@ -209,16 +269,47 @@ async def create_pos_order(
                     line_total=price,
                 )
             )
+            line_snapshots.append(
+                {
+                    "item_id": str(item_row["id"]),
+                    "volume_id": int(item_row["volume_id"]),
+                    "p_sell_new": p_sell_new,
+                    "final_sell_price": price,
+                    "line_total": price,
+                }
+            )
 
         discount_total = _calculate_discount(
             subtotal, payload.discount_type, payload.discount_value
         )
-        grand_total = max(subtotal - discount_total, 0)
+        base_grand_total = max(subtotal - discount_total, 0)
+        grand_total = base_grand_total
+        price_override_applied = False
+        override_reason_code: str | None = None
+        approved_by_user_id: str | None = None
+        approved_via: str | None = None
+
+        if payload.checkout_override is not None:
+            approval_auth = _resolve_manager_approval(payload.checkout_override.manager_approval_token)
+            override_floor = int(round(base_grand_total * _OVERRIDE_FLOOR_RATIO))
+            if payload.checkout_override.new_grand_total < override_floor:
+                raise AppError(
+                    code="OVERRIDE_BELOW_FLOOR",
+                    message="Giá bán sau khi sửa thấp hơn sàn cho phép (tối thiểu 70% giá trị gốc).",
+                    status_code=status.HTTP_409_CONFLICT,
+                )
+
+            grand_total = payload.checkout_override.new_grand_total
+            price_override_applied = True
+            override_reason_code = payload.checkout_override.reason_code
+            approved_by_user_id = approval_auth.user_id
+            approved_via = payload.checkout_override.manager_auth_method
+
         payment_total = sum(line.amount for line in payload.split_payments)
         if payment_total != grand_total:
             raise AppError(
                 code="SPLIT_PAYMENT_MISMATCH",
-                message="Tong split payment khong khop voi tong thanh toan.",
+                message="Tổng giá trị các phương thức thanh toán không khớp với số tiền phải trả.",
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -256,7 +347,7 @@ async def create_pos_order(
             if lock_result.rowcount != 1:
                 raise AppError(
                     code="ORDER_LOCK_CONFLICT",
-                    message="Khong the khoa tat ca item de tao don ban.",
+                    message="Không thể khóa các sản phẩm để tạo đơn hàng. Vui lòng thử lại sau.",
                     status_code=status.HTTP_423_LOCKED,
                 )
 
@@ -310,20 +401,20 @@ async def create_pos_order(
         order_id_result = await session.execute(text("SELECT last_insert_rowid() AS value;"))
         order_id = int(order_id_result.scalar_one())
 
-        for line_item in line_items:
+        for line_snapshot in line_snapshots:
             await session.execute(
                 text(
                     """
                     INSERT INTO pos_order_item (
                         order_id,
-                        item_id,
+                        volume_id,
                         final_sell_price,
                         quantity,
                         line_total
                     )
                     VALUES (
                         :order_id,
-                        :item_id,
+                        :volume_id,
                         :final_sell_price,
                         :quantity,
                         :line_total
@@ -332,10 +423,78 @@ async def create_pos_order(
                 ),
                 {
                     "order_id": order_id,
-                    "item_id": line_item.item_id,
-                    "final_sell_price": line_item.final_sell_price,
-                    "quantity": line_item.quantity,
-                    "line_total": line_item.line_total,
+                    "volume_id": line_snapshot["volume_id"],
+                    "final_sell_price": line_snapshot["final_sell_price"],
+                    "quantity": 1,
+                    "line_total": line_snapshot["line_total"],
+                },
+            )
+            pos_order_item_id_result = await session.execute(text("SELECT last_insert_rowid() AS value;"))
+            pos_order_item_id = int(pos_order_item_id_result.scalar_one())
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO order_item (
+                        order_type,
+                        pos_order_id,
+                        rental_contract_id,
+                        pos_order_item_id,
+                        rental_item_id,
+                        volume_id,
+                        item_id,
+                        quantity,
+                        p_sell_new_snapshot,
+                        final_sell_price,
+                        line_total,
+                        price_rule_id,
+                        price_rule_version,
+                        override_applied,
+                        override_reason_code,
+                        override_reason_note,
+                        approved_by_user_id,
+                        approved_via
+                    )
+                    VALUES (
+                        'sale',
+                        :pos_order_id,
+                        NULL,
+                        :pos_order_item_id,
+                        NULL,
+                        :volume_id,
+                        :item_id,
+                        1,
+                        :p_sell_new_snapshot,
+                        :final_sell_price,
+                        :line_total,
+                        :price_rule_id,
+                        :price_rule_version,
+                        :override_applied,
+                        :override_reason_code,
+                        :override_reason_note,
+                        :approved_by_user_id,
+                        :approved_via
+                    );
+                    """
+                ),
+                {
+                    "pos_order_id": order_id,
+                    "pos_order_item_id": pos_order_item_id,
+                    "volume_id": line_snapshot["volume_id"],
+                    "item_id": line_snapshot["item_id"],
+                    "p_sell_new_snapshot": line_snapshot["p_sell_new"],
+                    "final_sell_price": line_snapshot["final_sell_price"],
+                    "line_total": line_snapshot["line_total"],
+                    "price_rule_id": pricing_rule.rule_id,
+                    "price_rule_version": pricing_rule.version_no,
+                    "override_applied": 1 if price_override_applied else 0,
+                    "override_reason_code": override_reason_code,
+                    "override_reason_note": (
+                        payload.checkout_override.reason_note
+                        if payload.checkout_override is not None
+                        else None
+                    ),
+                    "approved_by_user_id": approved_by_user_id,
+                    "approved_via": approved_via,
                 },
             )
 
@@ -368,6 +527,24 @@ async def create_pos_order(
             )
 
         ip_address, device_id = get_request_meta(request)
+        if price_override_applied:
+            await write_audit_log(
+                session,
+                actor_user_id=auth.user_id,
+                action="POS_PRICE_OVERRIDE",
+                entity_type="pos_order",
+                entity_id=str(order_id),
+                before={"grand_total": base_grand_total},
+                after={
+                    "grand_total": grand_total,
+                    "reason_code": override_reason_code,
+                    "approved_by_user_id": approved_by_user_id,
+                    "approved_via": approved_via,
+                },
+                ip_address=ip_address,
+                device_id=device_id,
+            )
+
         await write_audit_log(
             session,
             actor_user_id=auth.user_id,
@@ -381,6 +558,9 @@ async def create_pos_order(
                 "discount_total": discount_total,
                 "grand_total": grand_total,
                 "item_ids": [line.item_id for line in line_items],
+                "price_rule_version": pricing_rule.version_no,
+                "price_override_applied": price_override_applied,
+                "override_reason_code": override_reason_code,
             },
             ip_address=ip_address,
             device_id=device_id,
@@ -393,10 +573,24 @@ async def create_pos_order(
             subtotal=subtotal,
             discount_total=discount_total,
             grand_total=grand_total,
+            price_rule_version=pricing_rule.version_no,
+            price_override_applied=price_override_applied,
+            override_reason_code=override_reason_code,
             payment_breakdown=payload.split_payments,
             line_items=line_items,
         )
     )
+
+    for item_row in item_rows:
+        await event_publisher.publish_item_status_changed(
+            item_id=str(item_row["id"]),
+            old_status=str(item_row["status"]),
+            new_status="sold",
+            changed_at=now_iso,
+            source_api="pos_create_order_v1",
+            changed_by=auth.user_id,
+            branch_id=auth.branch_id,
+        )
 
     try:
         async with session.begin():
@@ -463,7 +657,7 @@ async def refund_pos_order(
         if order_row is None:
             raise AppError(
                 code="ORDER_NOT_FOUND",
-                message="Khong tim thay don hang can hoan tien.",
+                message="Không tìm thấy đơn hàng tương ứng để thực hiện hoàn tiền.",
                 status_code=status.HTTP_404_NOT_FOUND,
             )
 
@@ -471,7 +665,7 @@ async def refund_pos_order(
         if now - created_at > timedelta(days=7):
             raise AppError(
                 code="REFUND_WINDOW_EXPIRED",
-                message="Don hang da qua cua so cho phep hoan tien.",
+                message="Đơn hàng đã quá thời hạn cho phép hoàn tiền (tối đa 7 ngày kể từ lúc mua).",
                 status_code=status.HTTP_409_CONFLICT,
             )
 
@@ -507,13 +701,13 @@ async def refund_pos_order(
             if item is None:
                 raise AppError(
                     code="REFUND_EXCEEDS_PAID_AMOUNT",
-                    message="Item hoan tien khong thuoc don hang goc.",
+                    message="Sản phẩm yêu cầu hoàn trả không tồn tại trong đơn hàng gốc.",
                     status_code=status.HTTP_400_BAD_REQUEST,
                 )
             if refund_line.volume_id in already_refunded_items:
                 raise AppError(
                     code="ITEM_ALREADY_REFUNDED",
-                    message="Item da duoc hoan tien truoc do.",
+                    message="Sản phẩm này đã được thực hiện hoàn tiền trước đó.",
                     status_code=status.HTTP_409_CONFLICT,
                 )
 
@@ -542,7 +736,7 @@ async def refund_pos_order(
         if refunded_total_before + refund_amount > int(order_row["paid_total"]):
             raise AppError(
                 code="REFUND_EXCEEDS_PAID_AMOUNT",
-                message="Tong tien hoan vuot qua so tien da thanh toan.",
+                message="Tổng số tiền hoàn trả vượt quá giới hạn số dư đã thanh toán của đơn hàng này.",
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 

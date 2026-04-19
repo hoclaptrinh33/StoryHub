@@ -8,15 +8,22 @@
 
 <script setup>
 import { ref, provide, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import Notice from './components/layout/notice.vue'
 import ConfirmModal from './components/layout/ConfirmModal.vue'
+import { useScannerStore } from './stores/scanner'
+
+const router = useRouter()
+const scannerStore = useScannerStore()
 
 const noticeRef = ref(null)
 const confirmRef = ref(null)
 
-const SCAN_BUFFER_TIMEOUT_MS = 50
-const SCAN_MAX_KEY_INTERVAL_MS = 30
-const SCAN_MIN_LENGTH = 8
+const SCAN_BUFFER_TIMEOUT_MS = 200
+const SCAN_MAX_KEY_INTERVAL_MS = 60
+const SCAN_MIN_LENGTH = 4
+const SCAN_RELAXED_MAX_KEY_INTERVAL_MS = 180
+const SCAN_RELAXED_MIN_LENGTH = 8
 
 let scanBuffer = ''
 let scanTimestamps = []
@@ -53,7 +60,24 @@ const isEditableTarget = (target) => {
   )
 }
 
+const isCheckoutLocalInputTarget = (target) => {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+
+  if (router.currentRoute.value.path !== '/ban-hang') {
+    return false
+  }
+
+  // These inputs have their own local Enter handling in checkout view.
+  return target.id === 'manual-code-input' || target.id === 'customer-smart-input'
+}
+
 const emitScannerEvent = (code) => {
+  // Global smart processing
+  scannerStore.processGlobalScan(code)
+  
+  // Also keep the event for backward compatibility or local page use
   window.dispatchEvent(
     new CustomEvent('storyhub:scan', {
       detail: { code, at: Date.now() },
@@ -79,6 +103,17 @@ const clearScannerBuffer = () => {
   }
 }
 
+const hasScannerGapUnder = (maxGapMs) => {
+  for (let index = 1; index < scanTimestamps.length; index += 1) {
+    const gap = scanTimestamps[index] - scanTimestamps[index - 1]
+    if (gap > maxGapMs) {
+      return false
+    }
+  }
+
+  return true
+}
+
 const isScannerPattern = () => {
   if (scanBuffer.length < SCAN_MIN_LENGTH) {
     return false
@@ -88,24 +123,30 @@ const isScannerPattern = () => {
     return false
   }
 
-  for (let index = 1; index < scanTimestamps.length; index += 1) {
-    const gap = scanTimestamps[index] - scanTimestamps[index - 1]
-    if (gap > SCAN_MAX_KEY_INTERVAL_MS) {
-      return false
-    }
-  }
-
-  return true
+  return hasScannerGapUnder(SCAN_MAX_KEY_INTERVAL_MS)
 }
 
-const flushScannerBuffer = () => {
+const isRelaxedScannerPattern = () => {
+  if (scanBuffer.length < SCAN_RELAXED_MIN_LENGTH) {
+    return false
+  }
+
+  if (scanTimestamps.length < 2) {
+    return false
+  }
+
+  return hasScannerGapUnder(SCAN_RELAXED_MAX_KEY_INTERVAL_MS)
+}
+
+const flushScannerBuffer = ({ allowRelaxed = false } = {}) => {
   if (!scanBuffer) {
     clearScannerBuffer()
     return false
   }
 
   const code = scanBuffer.trim()
-  const validScannerInput = isScannerPattern()
+  const validScannerInput =
+    isScannerPattern() || (allowRelaxed && isRelaxedScannerPattern())
   clearScannerBuffer()
 
   if (!validScannerInput || code.length < SCAN_MIN_LENGTH) {
@@ -126,8 +167,20 @@ const scheduleScannerReset = () => {
   }, SCAN_BUFFER_TIMEOUT_MS)
 }
 
+const appendScannerKey = (key) => {
+  scanBuffer += key
+  scanTimestamps.push(performance.now())
+  scannerSessionActive = true
+  scheduleScannerReset()
+}
+
 const handleGlobalKeydown = (event) => {
   if (event.defaultPrevented || event.isComposing) {
+    return
+  }
+
+  // Disable global hotkeys and scanner logic on login page
+  if (router.currentRoute.value.path === '/login') {
     return
   }
 
@@ -135,19 +188,53 @@ const handleGlobalKeydown = (event) => {
     return
   }
 
+  if (isCheckoutLocalInputTarget(event.target)) {
+    // Avoid double-processing the same code by both local input handlers and global scanner.
+    return
+  }
+
   const key = event.key
-  if (key === 'F1' || key === 'Escape') {
+  const functionHotkeyMap = {
+    F1: 'f1',
+    F2: 'f2',
+    F3: 'f3',
+    F4: 'f4',
+    F5: 'f5',
+  }
+
+  if (key in functionHotkeyMap || key === 'Escape') {
     if (scannerSessionActive || hasBlockingModal()) {
       return
     }
 
     event.preventDefault()
-    emitHotkeyEvent(key === 'F1' ? 'f1' : 'escape')
+    if (key === 'Escape') {
+      if (router.currentRoute.value.path !== '/') {
+        void router.push('/')
+      }
+      emitHotkeyEvent('escape')
+      return
+    }
+
+    emitHotkeyEvent(functionHotkeyMap[key])
+    return
+  }
+
+  if (key === 'Delete' || key === 'ArrowUp' || key === 'ArrowDown') {
+    if (scannerSessionActive || isEditableTarget(event.target) || hasBlockingModal()) {
+      return
+    }
+
+    event.preventDefault()
+    if (key === 'Delete') emitHotkeyEvent('delete')
+    if (key === 'ArrowUp') emitHotkeyEvent('arrow-up')
+    if (key === 'ArrowDown') emitHotkeyEvent('arrow-down')
     return
   }
 
   if (key === '1' || key === '2' || key === '3' || key === '4') {
-    if (scannerSessionActive) {
+    if (scannerSessionActive || scanBuffer.length > 0) {
+      appendScannerKey(key)
       return
     }
 
@@ -160,7 +247,9 @@ const handleGlobalKeydown = (event) => {
 
   if (key === 'Enter') {
     if (scannerSessionActive || scanBuffer.length > 0) {
-      const didHandleScanner = flushScannerBuffer()
+      const didHandleScanner = flushScannerBuffer({
+        allowRelaxed: !isEditableTarget(event.target),
+      })
       if (didHandleScanner) {
         event.preventDefault()
         event.stopPropagation()
@@ -179,10 +268,7 @@ const handleGlobalKeydown = (event) => {
     return
   }
 
-  scanBuffer += key
-  scanTimestamps.push(performance.now())
-  scannerSessionActive = true
-  scheduleScannerReset()
+  appendScannerKey(key)
 }
 
 onMounted(() => {

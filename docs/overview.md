@@ -105,6 +105,8 @@ Mục đích: tránh sai lịch sử khi bảng giá thay đổi.
 ### Realtime và Migration
 
 - Realtime Item Live Updates: [realtime_item-live-updates.yaml](./realtime/realtime_item-live-updates.yaml)
+- Realtime implementation details: [implementation_websocket.md](./realtime/implementation_websocket.md)
+- WebSocket API reference: [websocket.md](./api-reference/v1/websocket.md)
 - Migration Blueprint -> Implementation v1: [migration_blueprint-to-implementation-v1.md](./migrations/migration_blueprint-to-implementation-v1.md)
 
 ### Lộ trình thực hiện dự án

@@ -22,6 +22,9 @@ states:
   - name: paying
     description: Đang xử lý thanh toán tạo đơn.
     ui_behavior: Disable inputs, hiển thị progress ngắn.
+  - name: manager_auth
+    description: Đang xác thực manager để cho phép override giá tại quầy.
+    ui_behavior: Mở popup PIN hoặc quét thẻ manager và khóa submit chính.
 
 data_binding:
   source: bp_pos-create-order_v1
@@ -30,6 +33,7 @@ data_binding:
     cart_items: request.item_ids
     discount_type: request.discount_type
     discount_value: request.discount_value
+    checkout_override: request.checkout_override
     payment_breakdown: request.split_payments
     order_id: response.order_id
     grand_total: response.grand_total
@@ -53,6 +57,22 @@ interactions:
     success_feedback: redirect
     confirm_required: false
     confirm_message: ""
+  - action: open_price_override
+    trigger: click icon cây bút cạnh grand_total
+    api_call: local_state_only
+    optimistic_update: true
+    loading_indicator: none
+    success_feedback: open_manager_auth_modal
+    confirm_required: false
+    confirm_message: ""
+  - action: submit_price_override
+    trigger: manager xác thực thành công và xác nhận lý do override
+    api_call: bp_pos-create-order_v1
+    optimistic_update: false
+    loading_indicator: overlay
+    success_feedback: inline_badge_override_applied
+    confirm_required: true
+    confirm_message: Xác nhận áp dụng giá override cho giao dịch này?
   - action: clear_cart
     trigger: ESC
     api_call: local_state_only
@@ -75,14 +95,27 @@ error_handling:
     ui: retry_banner
     message: Có xung đột dữ liệu, vui lòng thử lại ngay.
     action: retry_create_order
+  MANAGER_APPROVAL_REQUIRED:
+    ui: modal_error
+    message: Cần manager xác thực trước khi sửa giá.
+    action: focus_manager_pin_input
+  OVERRIDE_REASON_REQUIRED:
+    ui: inline_validation
+    message: Bắt buộc chọn lý do sửa giá.
+    action: focus_override_reason_dropdown
+  OVERRIDE_BELOW_FLOOR:
+    ui: inline_validation
+    message: Giá override thấp hơn mức cho phép theo policy.
+    action: reset_override_value
   NETWORK_ERROR:
     ui: retry_banner
     message: Mất kết nối backend cục bộ.
     action: retry_with_backoff
 
 auth_ui:
-  hide_if_no_permission: [button_refund_order, input_price_override]
-  disable_if_no_permission: [button_apply_manual_discount]
+  hide_if_no_permission: [button_refund_order]
+  disable_if_no_permission:
+    [button_apply_manual_discount, input_price_override, select_override_reason]
   route_guard:
     required_roles: [cashier, manager]
     redirect_to: /403

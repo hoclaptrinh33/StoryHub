@@ -143,6 +143,8 @@ logic:
     path: business-logic/logic_barcode-keyboard-buffer.md
   - name: security-audit-and-locking
     path: business-logic/logic_security-audit-and-locking.md
+  - name: pricing-engine
+    path: business-logic/logic_pricing-engine.md
 
 domains:
   - name: item
@@ -177,7 +179,7 @@ events:
 ui_contracts:
   - name: PosMainKiosk
     path: ui-contracts/ui_pos-main-kiosk.yaml
-    states_count: 6
+    states_count: 7
     related_api: bp_pos-create-order_v1
   - name: RentalReturnInspection
     path: ui-contracts/ui_rental-return-inspection.yaml
@@ -187,7 +189,7 @@ ui_contracts:
 user_flows:
   - name: pos-checkout
     path: user-flows/flow_pos-checkout.md
-    steps_count: 5
+    steps_count: 7
   - name: rental-return
     path: user-flows/flow_rental-return.md
     steps_count: 5
@@ -195,13 +197,16 @@ user_flows:
 configs:
   - name: storyhub-runtime
     path: config/config_storyhub-runtime.yaml
-    values_count: 7
+    values_count: 19
 
 realtime:
   - name: item-live-updates
     path: realtime/realtime_item-live-updates.yaml
     events_count: 2
     protocol: websocket
+  - name: websocket-implementation
+    path: realtime/implementation_websocket.md
+    status: implemented
 
 migrations:
   - name: blueprint-to-implementation-v1
@@ -215,6 +220,9 @@ how_to_guides:
     status: active
   - name: development-environment-setup
     path: how-to/howto_development-environment-setup.md
+    status: active
+  - name: websocket-troubleshooting-runbook
+    path: how-to/runbook_websocket-troubleshooting.md
     status: active
 
 standards:

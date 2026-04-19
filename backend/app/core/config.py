@@ -67,6 +67,46 @@ class Settings(BaseSettings):
         le=100,
         validation_alias="STORYHUB_DAMAGE_FEE_MAJOR_PERCENT",
     )
+    ws_heartbeat_interval_ms: int = Field(
+        default=30000,
+        ge=5000,
+        le=120000,
+        validation_alias="STORYHUB_WS_HEARTBEAT_INTERVAL_MS",
+    )
+    ws_max_missed_heartbeats: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        validation_alias="STORYHUB_WS_MAX_MISSED_HEARTBEATS",
+    )
+    ws_max_connections: int = Field(
+        default=300,
+        ge=10,
+        le=2000,
+        validation_alias="STORYHUB_WS_MAX_CONNECTIONS",
+    )
+    ws_message_size_limit_kb: int = Field(
+        default=64,
+        ge=8,
+        le=512,
+        validation_alias="STORYHUB_WS_MESSAGE_SIZE_LIMIT_KB",
+    )
+    secret_key: str = Field(
+        default="09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7",
+        validation_alias="STORYHUB_SECRET_KEY",
+    )
+    algorithm: str = Field(
+        default="HS256",
+        validation_alias="STORYHUB_ALGORITHM",
+    )
+    access_token_expire_minutes: int = Field(
+        default=60 * 24 * 7, # 1 week
+        validation_alias="STORYHUB_ACCESS_TOKEN_EXPIRE_MINUTES",
+    )
+    auth_allow_demo_tokens: bool = Field(
+        default=True,
+        validation_alias="STORYHUB_AUTH_ALLOW_DEMO_TOKENS",
+    )
 
     @property
     def cors_allow_origins(self) -> list[str]:

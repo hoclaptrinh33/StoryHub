@@ -73,9 +73,120 @@ values:
     sensitive: false
     hot_reload: true
 
+  pricing_k_rent_default:
+    type: number
+    default: 0.10
+    description: Hệ số mặc định tính giá thuê từ p_sell_new.
+    env_var: STORYHUB_PRICING_K_RENT_DEFAULT
+    min: 0.01
+    max: 1.00
+    sensitive: false
+    hot_reload: true
+
+  pricing_k_deposit_default:
+    type: number
+    default: 0.80
+    description: Hệ số mặc định tính cọc từ p_sell_new.
+    env_var: STORYHUB_PRICING_K_DEPOSIT_DEFAULT
+    min: 0.05
+    max: 2.00
+    sensitive: false
+    hot_reload: true
+
+  pricing_deposit_floor_amount:
+    type: number
+    default: 50000
+    description: Mức cọc sàn áp dụng cho công thức max(d_floor, p_sell_new * k_deposit).
+    env_var: STORYHUB_PRICING_DEPOSIT_FLOOR_AMOUNT
+    min: 0
+    max: 5000000
+    sensitive: false
+    hot_reload: true
+
+  pricing_used_sale_cap_ratio:
+    type: number
+    default: 0.85
+    description: Trần giá bán truyện cũ theo p_sell_new.
+    env_var: STORYHUB_PRICING_USED_SALE_CAP_RATIO
+    min: 0.10
+    max: 1.00
+    sensitive: false
+    hot_reload: true
+
+  pricing_sanity_min_rent_ratio:
+    type: number
+    default: 0.03
+    description: Tỷ lệ thuê tối thiểu hợp lệ trên p_sell_new khi kiểm định rule.
+    env_var: STORYHUB_PRICING_SANITY_MIN_RENT_RATIO
+    min: 0.00
+    max: 1.00
+    sensitive: false
+    hot_reload: true
+
+  pricing_sanity_max_rent_ratio:
+    type: number
+    default: 0.35
+    description: Tỷ lệ thuê tối đa hợp lệ trên p_sell_new khi kiểm định rule.
+    env_var: STORYHUB_PRICING_SANITY_MAX_RENT_RATIO
+    min: 0.00
+    max: 1.00
+    sensitive: false
+    hot_reload: true
+
+  pricing_sanity_min_deposit_ratio:
+    type: number
+    default: 0.30
+    description: Tỷ lệ cọc tối thiểu hợp lệ trên p_sell_new khi kiểm định rule.
+    env_var: STORYHUB_PRICING_SANITY_MIN_DEPOSIT_RATIO
+    min: 0.00
+    max: 2.00
+    sensitive: false
+    hot_reload: true
+
+  pricing_sanity_max_deposit_ratio:
+    type: number
+    default: 1.30
+    description: Tỷ lệ cọc tối đa hợp lệ trên p_sell_new khi kiểm định rule.
+    env_var: STORYHUB_PRICING_SANITY_MAX_DEPOSIT_RATIO
+    min: 0.00
+    max: 3.00
+    sensitive: false
+    hot_reload: true
+
+  pricing_sanity_min_used_sale_ratio:
+    type: number
+    default: 0.20
+    description: Tỷ lệ bán truyện cũ tối thiểu hợp lệ trên p_sell_new khi kiểm định rule.
+    env_var: STORYHUB_PRICING_SANITY_MIN_USED_SALE_RATIO
+    min: 0.00
+    max: 1.00
+    sensitive: false
+    hot_reload: true
+
+  pricing_sanity_max_used_sale_ratio:
+    type: number
+    default: 0.90
+    description: Tỷ lệ bán truyện cũ tối đa hợp lệ trên p_sell_new khi kiểm định rule.
+    env_var: STORYHUB_PRICING_SANITY_MAX_USED_SALE_RATIO
+    min: 0.00
+    max: 1.00
+    sensitive: false
+    hot_reload: true
+
+  manager_price_override_min_ratio:
+    type: number
+    default: 0.60
+    description: Mức giảm sâu nhất manager được override tại quầy theo tỷ lệ grand_total gợi ý.
+    env_var: STORYHUB_MANAGER_PRICE_OVERRIDE_MIN_RATIO
+    min: 0.00
+    max: 1.00
+    sensitive: false
+    hot_reload: true
+
 referenced_by:
   - bp_inventory-reserve-item_v1
   - bp_pos-create-order_v1
+  - logic_pricing-engine
   - bp_rental-return-items_v1
   - ui_pos-main-kiosk
   - ui_rental-return-inspection
@@ -100,3 +211,8 @@ tenant_overridable:
   - overdue_fee_per_day
   - damage_fee_minor_percent
   - damage_fee_major_percent
+  - pricing_k_rent_default
+  - pricing_k_deposit_default
+  - pricing_deposit_floor_amount
+  - pricing_used_sale_cap_ratio
+  - manager_price_override_min_ratio

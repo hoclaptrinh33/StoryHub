@@ -2,23 +2,25 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Depends, Path, Query, Request
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
-from app.api.v1.dependencies import AuthContext, get_auth_context
+from app.api.v1.dependencies import AuthContext, get_auth_context, get_event_publisher
 from app.api.v1.endpoints._common import get_request_meta, parse_iso_datetime, to_iso_z, utc_now
 from app.api.v1.schemas import ResponseEnvelope, success_response
 from app.core.config import get_settings
 from app.core.errors import AppError
 from app.db.session import get_db_session
 from app.services import (
+    EventPublisher,
     compute_deposit,
     compute_rent_price,
     get_cached_response,
+    resolve_active_price_rule,
     store_cached_response,
     write_audit_log,
 )
@@ -108,6 +110,21 @@ class ReturnRentalItemsPayload(BaseModel):
     contract_status: Literal["partial_returned", "closed"]
 
 
+class RentalSettlementStatusPayload(BaseModel):
+    settlement_id: str | None
+    contract_id: str
+    rental_fee: int
+    late_fee: int
+    damage_fee: int
+    lost_fee: int
+    total_fee: int
+    deducted_from_deposit: int
+    refund_to_customer: int
+    remaining_debt: int
+    settled_at: str | None
+    contract_status: Literal["active", "partial_returned", "closed", "overdue", "cancelled"]
+
+
 class RentalContractPreviewLine(BaseModel):
     item_id: str
     barcode: str
@@ -131,6 +148,24 @@ class RentalContractPreviewPayload(BaseModel):
     return_lines: list[RentalContractPreviewLine]
 
 
+class ReturnableRentalContractListItemPayload(BaseModel):
+    contract_id: str
+    customer_id: str
+    customer_name: str
+    customer_phone: str
+    status: Literal["active", "partial_returned", "overdue"]
+    due_date: str
+    remaining_deposit: int
+    open_item_count: int
+    rented_items_preview: str
+
+
+class ItemRentalStatusPayload(BaseModel):
+    """Response for checking if an item is currently rented"""
+    rental_contract_id: str | None
+    item_status: str
+
+
 def _condition_to_level(condition: str, fallback: int) -> int:
     if condition == "good":
         return max(fallback, 90)
@@ -147,6 +182,103 @@ def _calculate_damage_fee(final_deposit: int, condition_after: str) -> int:
     if condition_after == "major_damage":
         return int(final_deposit * settings.damage_fee_major_percent / 100)
     return 0
+
+
+@router.get(
+    "/contracts",
+    response_model=ResponseEnvelope[list[ReturnableRentalContractListItemPayload]],
+)
+async def get_returnable_rental_contracts(
+    q: str | None = Query(default=None, max_length=120),
+    limit: int = Query(default=30, ge=1, le=100),
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[list[ReturnableRentalContractListItemPayload]]:
+    auth.require_role("cashier", "manager")
+    auth.require_scope("rental:return")
+
+    query_term = (q or "").strip()
+    query_like = f"%{query_term}%"
+
+    result = await session.execute(
+        text(
+            """
+            SELECT
+                rc.id AS contract_id,
+                rc.customer_id,
+                rc.status,
+                rc.due_date,
+                rc.remaining_deposit,
+                c.name AS customer_name,
+                c.phone AS customer_phone,
+                SUM(CASE WHEN ri.status = 'rented' THEN 1 ELSE 0 END) AS open_item_count,
+                (
+                    SELECT GROUP_CONCAT(
+                        COALESCE(t2.name, 'Khong xac dinh')
+                        || CASE
+                            WHEN v2.volume_number IS NULL THEN ''
+                            ELSE ' Tap ' || CAST(v2.volume_number AS TEXT)
+                        END,
+                        ', '
+                    )
+                    FROM rental_item ri2
+                    LEFT JOIN item i2 ON i2.id = ri2.item_id
+                    LEFT JOIN volume v2 ON v2.id = i2.volume_id
+                    LEFT JOIN title t2 ON t2.id = v2.title_id
+                    WHERE ri2.contract_id = rc.id
+                      AND ri2.status = 'rented'
+                ) AS rented_items_preview
+            FROM rental_contract rc
+            JOIN customer c ON c.id = rc.customer_id
+            LEFT JOIN rental_item ri ON ri.contract_id = rc.id
+            WHERE rc.deleted_at IS NULL
+              AND c.deleted_at IS NULL
+              AND rc.status IN ('active', 'partial_returned', 'overdue')
+              AND (
+                :query_term = ''
+                OR CAST(rc.id AS TEXT) LIKE :query_like
+                OR LOWER(c.name) LIKE :query_like_lower
+                OR c.phone LIKE :query_like
+              )
+            GROUP BY
+                rc.id,
+                rc.customer_id,
+                rc.status,
+                rc.due_date,
+                rc.remaining_deposit,
+                c.name,
+                c.phone
+            HAVING SUM(CASE WHEN ri.status = 'rented' THEN 1 ELSE 0 END) > 0
+            ORDER BY rc.due_date ASC, rc.id DESC
+            LIMIT :limit;
+            """
+        ),
+        {
+            "query_term": query_term,
+            "query_like": query_like,
+            "query_like_lower": query_like.lower(),
+            "limit": limit,
+        },
+    )
+
+    contracts: list[ReturnableRentalContractListItemPayload] = []
+    for row in result.mappings():
+        due_date = parse_iso_datetime(str(row["due_date"]))
+        contracts.append(
+            ReturnableRentalContractListItemPayload(
+                contract_id=str(row["contract_id"]),
+                customer_id=str(row["customer_id"]),
+                customer_name=str(row["customer_name"]),
+                customer_phone=str(row["customer_phone"]),
+                status=str(row["status"]),
+                due_date=to_iso_z(due_date),
+                remaining_deposit=int(row["remaining_deposit"] or 0),
+                open_item_count=int(row["open_item_count"] or 0),
+                rented_items_preview=str(row["rented_items_preview"] or ""),
+            )
+        )
+
+    return success_response(contracts)
 
 
 @router.get(
@@ -260,12 +392,75 @@ async def get_rental_contract_preview(
     )
 
 
+@router.get(
+    "/contracts/{contract_id}/settlement",
+    response_model=ResponseEnvelope[RentalSettlementStatusPayload],
+)
+async def get_rental_settlement_status(
+    contract_id: int = Path(gt=0),
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[RentalSettlementStatusPayload]:
+    auth.require_role("cashier", "manager", "owner")
+    auth.require_scope("rental:return")
+
+    result = await session.execute(
+        text(
+            """
+            SELECT
+                rc.id AS contract_id,
+                rc.status AS contract_status,
+                rs.id AS settlement_id,
+                rs.rental_fee,
+                rs.late_fee,
+                rs.damage_fee,
+                rs.lost_fee,
+                rs.total_fee,
+                rs.deducted_from_deposit,
+                rs.refund_to_customer,
+                rs.remaining_debt,
+                rs.settled_at
+            FROM rental_contract rc
+            LEFT JOIN rental_settlement rs ON rs.contract_id = rc.id
+            WHERE rc.id = :contract_id
+              AND rc.deleted_at IS NULL;
+            """
+        ),
+        {"contract_id": contract_id},
+    )
+    row = result.mappings().first()
+    if row is None:
+        raise AppError(
+            code="CONTRACT_NOT_FOUND",
+            message="Khong tim thay hop dong can xem settlement.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    return success_response(
+        RentalSettlementStatusPayload(
+            settlement_id=str(row["settlement_id"]) if row["settlement_id"] is not None else None,
+            contract_id=str(row["contract_id"]),
+            rental_fee=int(row["rental_fee"] or 0),
+            late_fee=int(row["late_fee"] or 0),
+            damage_fee=int(row["damage_fee"] or 0),
+            lost_fee=int(row["lost_fee"] or 0),
+            total_fee=int(row["total_fee"] or 0),
+            deducted_from_deposit=int(row["deducted_from_deposit"] or 0),
+            refund_to_customer=int(row["refund_to_customer"] or 0),
+            remaining_debt=int(row["remaining_debt"] or 0),
+            settled_at=str(row["settled_at"]) if row["settled_at"] is not None else None,
+            contract_status=str(row["contract_status"]),
+        )
+    )
+
+
 @router.post("/contracts", response_model=ResponseEnvelope[CreateRentalContractPayload])
 async def create_rental_contract(
     payload: CreateRentalContractRequest,
     request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ) -> ResponseEnvelope[CreateRentalContractPayload] | dict[str, object]:
     auth.require_role("cashier", "manager")
     auth.require_scope("rental:write")
@@ -292,6 +487,8 @@ async def create_rental_contract(
         )
 
     async with session.begin():
+        pricing_rule = await resolve_active_price_rule(session)
+
         customer_result = await session.execute(
             text(
                 """
@@ -322,14 +519,19 @@ async def create_rental_contract(
                 text(
                     """
                     SELECT
-                        id,
-                        status,
-                        reserved_by_customer_id,
-                        reservation_expire_at,
-                        condition_level,
-                        health_percent
-                    FROM item
-                    WHERE id = :item_id AND deleted_at IS NULL;
+                        i.id,
+                        i.volume_id,
+                        i.status,
+                        i.reserved_by_customer_id,
+                        i.reservation_expire_at,
+                        i.condition_level,
+                        i.health_percent,
+                        v.p_sell_new
+                    FROM item i
+                    JOIN volume v ON v.id = i.volume_id
+                    WHERE i.id = :item_id
+                      AND i.deleted_at IS NULL
+                      AND v.deleted_at IS NULL;
                     """
                 ),
                 {"item_id": item_id},
@@ -395,8 +597,17 @@ async def create_rental_contract(
         rental_items: list[RentalItemSnapshot] = []
         auto_deposit_total = 0
         for item_row in selected_items:
-            rent_price = compute_rent_price(condition_level=int(item_row["condition_level"]))
-            deposit_amount = compute_deposit(rent_price=rent_price)
+            p_sell_new = int(item_row["p_sell_new"])
+            rent_price = compute_rent_price(
+                condition_level=int(item_row["condition_level"]),
+                p_sell_new=p_sell_new,
+                k_rent=pricing_rule.k_rent,
+            )
+            deposit_amount = compute_deposit(
+                p_sell_new=p_sell_new,
+                k_deposit=pricing_rule.k_deposit,
+                d_floor=pricing_rule.d_floor,
+            )
             auto_deposit_total += deposit_amount
             rental_items.append(
                 RentalItemSnapshot(
@@ -535,6 +746,77 @@ async def create_rental_contract(
                     "condition_before": int(item_meta["condition_level"]),
                 },
             )
+            rental_item_id_result = await session.execute(text("SELECT last_insert_rowid() AS value;"))
+            rental_item_id = int(rental_item_id_result.scalar_one())
+            await session.execute(
+                text(
+                    """
+                    INSERT INTO order_item (
+                        order_type,
+                        pos_order_id,
+                        rental_contract_id,
+                        pos_order_item_id,
+                        rental_item_id,
+                        volume_id,
+                        item_id,
+                        quantity,
+                        p_sell_new_snapshot,
+                        rent_ratio_snapshot,
+                        deposit_ratio_snapshot,
+                        deposit_floor_snapshot,
+                        final_rent_price,
+                        final_deposit,
+                        line_total,
+                        price_rule_id,
+                        price_rule_version,
+                        override_applied,
+                        override_reason_code,
+                        override_reason_note,
+                        approved_by_user_id,
+                        approved_via
+                    )
+                    VALUES (
+                        'rental',
+                        NULL,
+                        :rental_contract_id,
+                        NULL,
+                        :rental_item_id,
+                        :volume_id,
+                        :item_id,
+                        1,
+                        :p_sell_new_snapshot,
+                        :rent_ratio_snapshot,
+                        :deposit_ratio_snapshot,
+                        :deposit_floor_snapshot,
+                        :final_rent_price,
+                        :final_deposit,
+                        :line_total,
+                        :price_rule_id,
+                        :price_rule_version,
+                        0,
+                        NULL,
+                        NULL,
+                        NULL,
+                        NULL
+                    );
+                    """
+                ),
+                {
+                    "rental_contract_id": contract_id,
+                    "rental_item_id": rental_item_id,
+                    "volume_id": int(item_meta["volume_id"]),
+                    "item_id": rental_item.item_id,
+                    "p_sell_new_snapshot": int(item_meta["p_sell_new"]),
+                    "rent_ratio_snapshot": pricing_rule.k_rent,
+                    "deposit_ratio_snapshot": pricing_rule.k_deposit,
+                    "deposit_floor_snapshot": pricing_rule.d_floor,
+                    "final_rent_price": rental_item.final_rent_price,
+                    "final_deposit": rental_item.final_deposit,
+                    "line_total": rental_item.final_rent_price + rental_item.final_deposit,
+                    "price_rule_id": pricing_rule.rule_id,
+                    "price_rule_version": pricing_rule.version_no,
+                },
+            )
             await session.execute(
                 text(
                     """
@@ -559,6 +841,7 @@ async def create_rental_contract(
                 "customer_id": payload.customer_id,
                 "due_date": due_date_iso,
                 "deposit_total": deposit_total,
+                "price_rule_version": pricing_rule.version_no,
             },
             ip_address=ip_address,
             device_id=device_id,
@@ -574,6 +857,17 @@ async def create_rental_contract(
             rental_items=rental_items,
         )
     )
+
+    for selected_item in selected_items:
+        await event_publisher.publish_item_status_changed(
+            item_id=str(selected_item["id"]),
+            old_status=str(selected_item["status"]),
+            new_status="rented",
+            changed_at=now_iso,
+            source_api="rental_create_contract_v1",
+            changed_by=auth.user_id,
+            branch_id=auth.branch_id,
+        )
 
     try:
         async with session.begin():
@@ -759,6 +1053,7 @@ async def return_rental_items(
     contract_id: int = Path(gt=0),
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ) -> ResponseEnvelope[ReturnRentalItemsPayload] | dict[str, object]:
     auth.require_role("cashier", "manager")
     auth.require_scope("rental:return")
@@ -827,6 +1122,7 @@ async def return_rental_items(
         late_fee = 0
         damage_fee = 0
         lost_fee = 0
+        status_change_events: list[tuple[str, str, str]] = []
 
         for line in payload.return_lines:
             item_row = contract_items.get(line.item_id)
@@ -898,6 +1194,7 @@ async def return_rental_items(
                     "item_id": line.item_id,
                 },
             )
+            status_change_events.append((line.item_id, str(item_row["status"]), item_target_status))
 
         total_fee = rental_fee + late_fee + damage_fee + lost_fee
         remaining_deposit_before = int(contract_row["remaining_deposit"])
@@ -1108,6 +1405,27 @@ async def return_rental_items(
         )
     )
 
+    for item_id, old_status, new_status in status_change_events:
+        await event_publisher.publish_item_status_changed(
+            item_id=item_id,
+            old_status=old_status,
+            new_status=new_status,
+            changed_at=returned_at_iso,
+            source_api="rental_return_items_v1",
+            changed_by=auth.user_id,
+            branch_id=auth.branch_id,
+        )
+
+    await event_publisher.publish_rental_settlement_finished(
+        settlement_id=str(settlement_id),
+        contract_id=str(contract_id),
+        total_fee=int(aggregated["total_fee"]),
+        refund_to_customer=int(aggregated["refund_to_customer"]),
+        remaining_debt=int(aggregated["remaining_debt"]),
+        settled_at=returned_at_iso,
+        branch_id=auth.branch_id,
+    )
+
     try:
         async with session.begin():
             await store_cached_response(
@@ -1129,3 +1447,59 @@ async def return_rental_items(
         raise
 
     return envelope
+
+
+@router.get(
+    "/items/{item_id}/rental-status",
+    response_model=ResponseEnvelope[ItemRentalStatusPayload],
+)
+async def get_item_rental_status(
+    item_id: str = Path(min_length=1, max_length=50),
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[ItemRentalStatusPayload]:
+    """
+    Check if an item is currently rented by looking for active rental contracts.
+    Scanner can use this to determine whether to route to return page or create new rental.
+    """
+    auth.require_scope("rental:read")
+
+    # Query: find if this item is in an active rental contract
+    result = await session.execute(
+        text(
+            """
+            SELECT
+                rc.id AS contract_id,
+                i.status AS item_status
+            FROM rental_item ri
+            JOIN rental_contract rc ON rc.id = ri.contract_id
+            JOIN item i ON i.id = ri.item_id
+            WHERE ri.item_id = :item_id
+              AND ri.status = 'rented'
+              AND rc.status IN ('active', 'partial_returned', 'overdue')
+              AND rc.deleted_at IS NULL
+            LIMIT 1;
+            """
+        ),
+        {"item_id": item_id},
+    )
+
+    row = result.mappings().first()
+
+    if row:
+        # Item is rented in an active/partial/overdue contract
+        return success_response(
+            ItemRentalStatusPayload(
+                rental_contract_id=str(row["contract_id"]),
+                item_status=str(row["item_status"]),
+            )
+        )
+    else:
+        # Item is not currently rented (or not in an active contract)
+        return success_response(
+            ItemRentalStatusPayload(
+                rental_contract_id=None,
+                item_status="available",
+            )
+        )
+
