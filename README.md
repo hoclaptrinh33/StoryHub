@@ -31,21 +31,26 @@ StoryHub tối giản hóa mọi thao tác của thu ngân xuống mức thấp 
 
 ## 📸 Hệ thống giao diện (Real Screenshots)
 
-````carousel
+### Hero Dashboard
 ![Hero Dashboard](docs/assets/readme/hero.png)
-<!-- slide -->
+
+### Unified Checkout
 ![Unified Checkout](docs/assets/readme/checkout.png)
-<!-- slide -->
+
+### Smart Inventory
 ![Smart Inventory](docs/assets/readme/inventory.png)
-<!-- slide -->
+
+### Advanced Analytics
 ![Advanced Analytics](docs/assets/readme/analytics.png)
-<!-- slide -->
+
+### Return Inspection
 ![Return Inspection](docs/assets/readme/return_inspection.png)
-<!-- slide -->
+
+### Promotion Manager
 ![Promotion Manager](docs/assets/readme/promotion.png)
-<!-- slide -->
+
+### Business Management
 ![Business Management](docs/assets/readme/management.png)
-````
 
 ---
 
