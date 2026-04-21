@@ -19,6 +19,7 @@ async def write_audit_log(
     ip_address: str | None,
     device_id: str | None,
 ) -> None:
+
     await session.execute(
         text(
             """

@@ -13,6 +13,7 @@ const routes = [
         path: '/',
         name: 'Dashboard',
         component: Dashboard,
+
     },
     {
         path: '/quan-ly',
@@ -37,7 +38,7 @@ const routes = [
     {
         path: '/kho',
         name: 'Inventory',
-        component: () => import('../views/inventory.vue'),
+        component: () => import('../views/manager_title.vue'),
     },
     {
         path: '/khach-hang',
@@ -63,7 +64,7 @@ const router = createRouter({
 
 router.beforeEach((to, _from, next) => {
     const authStore = useAuthStore()
-    
+
     if (to.meta.public) {
         // If logged in and trying to go to login, redirect to dashboard
         if (to.name === 'Login' && authStore.isAuthenticated) {

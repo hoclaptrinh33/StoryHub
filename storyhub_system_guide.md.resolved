@@ -1,0 +1,370 @@
+# 📚 StoryHub — Tài Liệu Hệ Thống Toàn Diện
+
+## 1. Tổng Quan Kiến Trúc
+
+StoryHub là phần mềm **quản lý cửa hàng truyện tranh** (POS, cho thuê, kho, báo cáo) chạy hoàn toàn **cục bộ** (offline-first). Kiến trúc gồm 2 tầng chính:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              FRONTEND  (Tauri Desktop App)                   │
+│   Vue 3 + TypeScript + Pinia + Vue Router  →  port 5173     │
+│   Giao tiếp qua:  REST API  +  WebSocket                    │
+└───────────────────────┬─────────────────────────────────────┘
+                        │  HTTP / WS  (localhost:8000)
+┌───────────────────────▼─────────────────────────────────────┐
+│              BACKEND  (FastAPI / Python)                     │
+│   FastAPI + SQLAlchemy + Alembic  →  port 8000              │
+│   Database: SQLite (storyhub.db)                            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+> **Quan trọng**: Frontend là ứng dụng desktop **Tauri** (không phải web thông thường). Tauri đóng gói HTML/JS/CSS thành file `.exe` chạy trên Windows — không cần trình duyệt.
+
+---
+
+## 2. Công Nghệ Sử Dụng
+
+| Tầng | Công nghệ | Vai trò |
+|------|-----------|---------|
+| **Backend** | Python 3.12 | Ngôn ngữ chính |
+| | FastAPI | Web framework, tự sinh docs tại `/docs` |
+| | SQLAlchemy (async) | ORM — ánh xạ Python ↔ SQLite |
+| | Alembic | Migration database (thay đổi schema) |
+| | Pydantic v2 | Validate request/response data |
+| | aiosqlite | Driver async cho SQLite |
+| | JWT (HS256) | Xác thực người dùng |
+| | WebSocket | Realtime — thông báo thay đổi item live |
+| **Frontend** | Vue 3 (Composition API) | UI framework |
+| | TypeScript | Type safety |
+| | Pinia | State management (thay thế Vuex) |
+| | Vue Router 4 | Điều hướng trang |
+| | Vite | Build tool / dev server |
+| | Tauri 2 | Đóng gói thành app desktop (.exe) |
+| | Vitest | Unit test frontend |
+| **Database** | SQLite | File DB cục bộ: `storyhub.db` |
+
+---
+
+## 3. Cấu Trúc Thư Mục Gốc
+
+```
+StoryHub/
+├── backend/          ← Server FastAPI (Python)
+├── frontend/         ← App desktop (Vue 3 + Tauri)
+├── StoryHub/         ← (thư mục trùng tên – có thể là build cũ)
+├── storage/          ← Ảnh bìa sách được lưu ở đây
+├── backups/          ← File backup DB (.db)
+├── docs/             ← Tài liệu kỹ thuật
+├── scripts/          ← Script tiện ích (seed, migration...)
+└── .venv/            ← Virtual environment Python
+```
+
+---
+
+## 4. Backend — Chi Tiết Từng Thư Mục & File
+
+### 4.1 `backend/app/main.py` — Điểm Khởi Động
+
+Đây là **file quan trọng nhất** của backend:
+- Khởi tạo ứng dụng FastAPI
+- Đăng ký CORS (cho phép frontend gọi API)
+- Mount thư mục `/storage` để phục vụ ảnh tĩnh
+- Đăng ký các router: `api_v1_router` (REST) + `websocket_router` (WS)
+- Khởi động các service: `WebSocketConnectionManager`, `EventPublisher`, `RealtimeMetrics`
+- Xử lý global exception (AppError, ValidationError, v.v.)
+
+### 4.2 `backend/app/core/` — Cấu Hình Hệ Thống
+
+| File | Chức năng |
+|------|-----------|
+| `config.py` | Tất cả cấu hình hệ thống đọc từ file `.env` (DB URL, JWT secret, phí phạt, timeout...) |
+| `security.py` | Tạo/xác minh JWT token, hash mật khẩu |
+| `errors.py` | Định nghĩa class `AppError` — lỗi nghiệp vụ tùy chỉnh |
+| `logging.py` | Cấu hình logging (ghi log) |
+
+### 4.3 `backend/app/db/` — Database
+
+| File | Chức năng |
+|------|-----------|
+| `models.py` | **Định nghĩa toàn bộ bảng DB** (SQLAlchemy ORM) — xem chi tiết mục 4.3.1 |
+| `session.py` | Tạo engine + session async cho SQLAlchemy |
+| `migration.py` | Logic chạy migration DB |
+| `runtime_schema.py` | Tự tạo bảng phụ lúc runtime |
+| `seed.py` | Seed dữ liệu mẫu ban đầu |
+| `migrations/` | Thư mục chứa các file migration của Alembic |
+
+#### 4.3.1 Các bảng Database (models.py)
+
+```
+Domain 1: KHO SÁCH
+  Title       → Đầu truyện (tên, tác giả, thể loại, ảnh bìa)
+  Volume      → Tập (số tập, ISBN, số lượng bán lẻ, giá)
+  Item        → Bản sao vật lý cụ thể (barcode, tình trạng, trạng thái)
+
+Domain 2: KHÁCH HÀNG
+  Customer    → Khách hàng (tên, SĐT, hạng thành viên, cọc, nợ, blacklist)
+  Reservation → Đặt trước item
+
+Domain 3: BÁN HÀNG (POS)
+  PosOrder    → Đơn bán (subtotal, discount, grand_total)
+  PosOrderItem → Dòng sản phẩm trong đơn
+  PosPayment  → Thanh toán (cash/bank/e-wallet/card)
+  PriceRule   → Quy tắc tính giá thuê/cọc
+
+Domain 4: CHO THUÊ
+  RentalContract  → Hợp đồng thuê (ngày thuê, ngày hết hạn, cọc)
+  RentalItem      → Sách trong hợp đồng (tình trạng trước/sau)
+  RentalSettlement → Thanh lý hợp đồng (phí thuê, phí phạt, hoàn cọc)
+
+Domain 5: HỆ THỐNG
+  MetadataCache → Cache metadata sách (từ API ngoài)
+  BackupJob     → Lịch sử backup
+  AuditLog      → Nhật ký hành động người dùng
+
+Domain 6: AUTH
+  User → Tài khoản (username, password hash, role: owner/manager/cashier)
+```
+
+### 4.4 `backend/app/api/v1/` — REST API
+
+#### `endpoints/` — Các endpoint cụ thể
+
+| File | URL Prefix | Chức năng |
+|------|-----------|-----------|
+| `auth.py` | `/api/v1/auth` | Đăng nhập, lấy JWT token |
+| `checkout.py` | `/api/v1/checkout` | Thanh toán hợp nhất (bán + thuê cùng lúc), in hóa đơn |
+| `inventory.py` | `/api/v1/inventory` | Quản lý kho: thêm volume, đổi giá, chuyển sang thuê |
+| `customers.py` | `/api/v1/customers` | CRUD khách hàng |
+| `rental.py` | `/api/v1/rentals` | Hợp đồng thuê, trả sách, thanh lý |
+| `reports.py` | `/api/v1/reports` | Báo cáo doanh thu, top sách, top khách |
+| `system.py` | `/api/v1/system` | Backup DB, thông tin hệ thống |
+| `metadata.py` | `/api/v1/metadata` | Autofill thông tin sách (tra ISBN) |
+| `pos.py` | `/api/v1/pos` | Các thao tác POS bổ sung |
+| `health.py` | `/api/v1/health` | Health check endpoint |
+
+#### `schemas/` — Cấu trúc request/response
+- `envelope.py`: Định dạng chuẩn `{ success, data, error }` cho mọi response
+
+#### `dependencies/` — Dependency injection
+- Xác thực token, inject DB session, inject các service vào endpoint
+
+#### `websocket.py` — WebSocket Endpoint
+- URL: `ws://localhost:8000/ws/item-live-updates`
+- Phát sự kiện realtime về thay đổi trạng thái item cho tất cả client đang kết nối
+
+### 4.5 `backend/app/services/` — Business Logic
+
+| File | Chức năng |
+|------|-----------|
+| `websocket_manager.py` | Quản lý kết nối WS, heartbeat, giới hạn kết nối |
+| `event_publisher.py` | Publish events qua WebSocket khi item thay đổi |
+| `pricing.py` | Tính giá thuê/cọc dựa trên PriceRule |
+| `cover_storage.py` | Lưu/load ảnh bìa sách vào `storage/` |
+| `audit.py` | Ghi AuditLog cho các hành động quan trọng |
+| `idempotency.py` | Chống duplicate request (dùng `request_id`) |
+| `realtime_metrics.py` | Theo dõi metrics WebSocket |
+
+---
+
+## 5. Frontend — Chi Tiết Từng Thư Mục & File
+
+### 5.1 Entry Points
+
+| File | Chức năng |
+|------|-----------|
+| `index.html` | HTML shell — điểm mount Vue app |
+| `src/main.ts` | Khởi tạo Vue app, đăng ký Pinia + Router |
+| `src/App.vue` | Root component — chứa `<RouterView>` + layout chung |
+| `src/style.css` | CSS global |
+| `vite.config.ts` | Cấu hình Vite build |
+| `src-tauri/` | Cấu hình Tauri (permissions, app icon, window config) |
+
+### 5.2 `src/views/` — Các Màn Hình Chính
+
+| File | Route | Chức năng |
+|------|-------|-----------|
+| `login.vue` | `/login` | Đăng nhập, gọi API auth, lưu JWT |
+| `Dashboard.vue` | `/` | Trang chủ — thống kê nhanh, realtime metrics |
+| `checkout.vue` | `/ban-hang` | **Lớn nhất** — Thanh toán POS, quét barcode, chọn KH, tính tiền, in HĐ |
+| `inventory.vue` | _(không có route riêng)_ | Quản lý tổng hợp kho |
+| `manager_title.vue` | `/kho` | Quản lý đầu truyện/tập, thêm kho, đổi giá |
+| `manager.vue` | `/quan-ly` | Quản lý nhân sự, cài đặt hệ thống |
+| `customer.vue` | `/khach-hang` | CRUD khách hàng, xem lịch sử |
+| `rental-return-inspection.vue` | `/hoan-tra` | Trả sách thuê, đánh giá tình trạng, tính phí |
+| `report.vue` | `/bao-cao` | Báo cáo doanh thu, biểu đồ, top sách/KH |
+| `Promotion.vue` | `/khuyen-mai` | Quản lý khuyến mãi, cấu hình giảm giá |
+| `Placeholder.vue` | `/settings` | Trang chờ (chưa implement) |
+
+### 5.3 `src/stores/` — Pinia State Management
+
+| File | Chức năng |
+|------|-----------|
+| `auth.ts` | Lưu JWT token + thông tin user (persist vào localStorage) |
+| `realtimeEvents.ts` | Xử lý và lưu events realtime từ WebSocket (thay đổi item) |
+| `scanner.ts` | Buffer barcode scanner — gom các ký tự scan thành mã hoàn chỉnh |
+| `system.ts` | Trạng thái hệ thống toàn cục (loading state, notifications...) |
+
+### 5.4 `src/services/` — Giao Tiếp API
+
+| File | Chức năng |
+|------|-----------|
+| `storyhubApi.ts` | **File trung tâm** — định nghĩa toàn bộ hàm gọi API REST (`fetch` wrapper), type definitions cho request/response |
+| `wsManager.ts` | Quản lý vòng đời kết nối WebSocket (auto-reconnect, error handling) |
+
+### 5.5 `src/composables/` — Vue Composables
+
+| File | Chức năng |
+|------|-----------|
+| `useWebSocket.ts` | Composable tiện ích để dùng WebSocket trong component |
+
+### 5.6 `src/types/` — TypeScript Types
+
+| File | Chức năng |
+|------|-----------|
+| `realtime.ts` | Định nghĩa type cho realtime event payloads từ WS |
+
+### 5.7 `src/components/layout/` — Layout Components
+Chứa các component layout dùng chung (sidebar, navbar).
+
+### 5.8 `src/router/index.ts` — Điều Hướng
+- Định nghĩa 10 routes
+- **Navigation guard**: Tự động redirect về `/login` nếu chưa đăng nhập
+
+---
+
+## 6. Luồng Dữ Liệu — Từ Người Dùng Đến Database
+
+```
+Người dùng thao tác trên giao diện
+        ↓
+[Vue Component] (views/*.vue)
+  - Gọi hàm từ storyhubApi.ts
+  - Đọc/ghi vào Pinia store nếu cần
+        ↓
+[storyhubApi.ts] — fetch() với Bearer JWT token
+        ↓
+[FastAPI Backend] — port 8000
+  → Router → Endpoint (e.g. checkout.py)
+  → Dependencies: xác thực JWT, inject DB session  
+  → Business logic + ghi DB
+  → Gọi EventPublisher để phát WS event
+        ↓
+[SQLite — storyhub.db]
+        ↓ (đồng thời)
+[WebSocket] → Pinia realtimeEvents store → Dashboard cập nhật live
+```
+
+---
+
+## 7. Hướng Dẫn Thêm / Nâng Cấp Tính Năng
+
+### A. Thêm một API endpoint mới
+
+1. **Tạo/sửa file endpoint** trong `backend/app/api/v1/endpoints/`
+   ```python
+   # Ví dụ: thêm endpoint thống kê sách
+   @router.get("/stats")
+   async def get_book_stats(db: AsyncSession = Depends(get_db), ...):
+       ...
+   ```
+
+2. **Đăng ký router** trong `backend/app/api/v1/router.py`
+
+3. **Thêm hàm gọi API** trong `frontend/src/services/storyhubApi.ts`
+   ```typescript
+   export async function fetchBookStats(token: string): Promise<BookStatsPayload> {
+     return request<BookStatsPayload>("/api/v1/inventory/stats", { method: "GET", token });
+   }
+   ```
+
+4. **Dùng trong Vue component** (views hoặc composables)
+
+### B. Thêm trường mới vào database
+
+1. **Sửa model** trong `backend/app/db/models.py` (thêm Column)
+
+2. **Tạo file migration** (chạy lệnh):
+   ```bash
+   cd backend
+   alembic revision --autogenerate -m "add_field_to_table"
+   alembic upgrade head
+   ```
+
+3. **Cập nhật schema** (nếu dùng endpoint) trong logic endpoint tương ứng
+
+### C. Thêm màn hình mới (View)
+
+1. **Tạo file** `frontend/src/views/MyNewView.vue`
+
+2. **Đăng ký route** trong `frontend/src/router/index.ts`:
+   ```typescript
+   { path: '/tinh-nang-moi', name: 'MyFeature', component: () => import('../views/MyNewView.vue') }
+   ```
+
+3. **Thêm vào sidebar** (trong `src/components/layout/`)
+
+### D. Thêm trạng thái toàn cục mới
+
+1. **Tạo store** trong `frontend/src/stores/myStore.ts`
+   ```typescript
+   export const useMyStore = defineStore('myStore', () => {
+     const data = ref(null)
+     return { data }
+   })
+   ```
+
+2. **Dùng trong component**: `const myStore = useMyStore()`
+
+### E. Thêm WebSocket event mới
+
+1. **Backend**: Phát event trong `services/event_publisher.py`
+2. **Frontend**: Xử lý event trong `stores/realtimeEvents.ts`
+
+---
+
+## 8. Cách Chạy Hệ Thống
+
+### Backend
+```bash
+cd backend
+# Kích hoạt venv (đã có .venv ở root)
+..\.venv\Scripts\activate
+# Chạy server
+uvicorn app.main:app --reload --port 8000
+```
+→ API docs tại: `http://localhost:8000/docs`
+
+### Frontend (Dev mode)
+```bash
+cd frontend
+npm install        # lần đầu
+npm run dev        # web dev server port 5173
+# Hoặc chạy Tauri desktop:
+npm run tauri dev
+```
+
+---
+
+## 9. Phân Quyền Người Dùng
+
+| Role | Quyền |
+|------|-------|
+| `owner` | Toàn quyền — bao gồm quản lý user, backup |
+| `manager` | Quản lý kho, xem báo cáo, cấu hình giá |
+| `cashier` | Bán hàng, cho thuê, trả sách, xem KH |
+
+JWT token được lưu trong `localStorage` (`storyhub_token`) và gửi kèm mỗi request qua header `Authorization: Bearer <token>`.
+
+---
+
+## 10. File Cấu Hình Quan Trọng
+
+| File | Vị trí | Nội dung cấu hình |
+|------|--------|-------------------|
+| `.env` | `backend/` | DB URL, secret key, phí phạt, CORS origins |
+| `alembic.ini` | `backend/` | Cấu hình tool migration Alembic |
+| `pyproject.toml` | `backend/` | Dependencies Python (FastAPI, SQLAlchemy...) |
+| `package.json` | `frontend/` | Dependencies JS (Vue, Pinia, Tauri...) |
+| `vite.config.ts` | `frontend/` | Cấu hình build Vite |
+| `vitest.config.ts` | `frontend/` | Cấu hình unit test |
+| `src-tauri/tauri.conf.json` | `frontend/src-tauri/` | Cấu hình app desktop (tên, icon, permissions) |

@@ -157,7 +157,7 @@ cd StoryHub
 powershell -ExecutionPolicy Bypass -File scripts/setup.ps1
 
 # Khởi chạy ứng dụng
-# 1. Chạy Backend (Terminal 1): scripts/dev-backend.ps1
+# 1. Chạy Backend (Terminal 1): run_backend.bat
 # 2. Chạy Frontend (Terminal 2): cd frontend; npm run tauri:dev
 ```
 

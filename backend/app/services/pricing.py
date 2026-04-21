@@ -10,9 +10,9 @@ from starlette import status
 from app.core.errors import AppError
 
 
-_DEFAULT_K_RENT = 0.2666666667
-_DEFAULT_K_DEPOSIT = 1.0666666667
-_DEFAULT_D_FLOOR = 10000
+_DEFAULT_K_RENT = 0.05          # 5% giá bán → giá thuê/ngày
+_DEFAULT_K_DEPOSIT = 0.30       # 30% giá bán → tiền cọc
+_DEFAULT_D_FLOOR = 1000         # sàn tối thiểu 1.000đ
 _DEFAULT_USED_DEMAND_FACTOR = 1.0
 _DEFAULT_USED_CAP_RATIO = 1.0
 _DEFAULT_P_SELL_NEW = 30000
@@ -45,7 +45,7 @@ def _validate_rule_sanity(rule: PriceRuleSnapshot) -> None:
     issues: list[dict[str, object]] = []
     if not 0.05 <= rule.k_rent <= 0.95:
         issues.append({"field": "k_rent", "value": rule.k_rent})
-    if not 0.5 <= rule.k_deposit <= 3.0:
+    if not 0.1 <= rule.k_deposit <= 3.0:
         issues.append({"field": "k_deposit", "value": rule.k_deposit})
     if rule.k_deposit < rule.k_rent:
         issues.append(

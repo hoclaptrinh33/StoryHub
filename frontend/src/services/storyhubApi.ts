@@ -209,19 +209,54 @@ export type ConvertToRentalRequest = {
   volume_id: number;
   quantity: number;
   request_id: string;
+token: string;
 };
 
 export type CreateVolumeRequest = {
   title_name: string;
   author: string;
-  description?: string;
-  cover_url?: string;
-  categories?: string[];
-  page_count?: number;
-  published_date?: string;
+  description: string;
+  cover_url: string | null;
+  categories: string[];
+  page_count: number | null;
+  published_date: string | null;
   volume_number: number;
   isbn: string;
+  p_sell_new: number;
   retail_stock: number;
+  request_id: string;
+};
+
+export type TitleMutateRequest = {
+  name: string;
+  author: string | null;
+  description: string | null;
+  genre: string | null;
+  publisher: string | null;
+  request_id: string;
+};
+
+export type VolumeMutateRequest = {
+  volume_number: number;
+  isbn: string | null;
+  p_sell_new: number;
+  retail_stock: number;
+  request_id: string;
+};
+
+export type ItemCreateRequest = {
+  volume_id: number;
+  id: string | null;
+  condition_level: number;
+  notes: string | null;
+  version_no: number;
+  request_id: string;
+};
+
+export type ItemUpdateRequest = {
+  status: string;
+  condition_level: number;
+  notes: string | null;
   request_id: string;
 };
 
@@ -752,4 +787,108 @@ export async function login(payload: LoginRequest): Promise<LoginPayload> {
     throw new Error("Phản hồi đăng nhập không hợp lệ.");
   }
   return envelope.data;
+}
+
+// ─── Titles / Volumes / Items (Manager Kho) ─────────────────────────────────
+
+export type TitleItem = {
+  id: string;
+  status: string;
+  condition_level: number;
+  notes: string | null;
+  has_barcode: boolean;
+  version_no: number;
+  reserved_at: string | null;
+  reservation_expire_at: string | null;
+};
+
+export type TitleVolume = {
+  id: number;
+  volume_number: number;
+  isbn: string | null;
+  p_sell_new: number;
+  price_rental: number;   // 5% giá bán (tự động từ backend)
+  price_deposit: number;  // 30% giá bán (tự động từ backend)
+  retail_stock: number;
+  rental_item_count: number; // số bản sao thuê available
+  items: TitleItem[];
+};
+
+export type TitleEntry = {
+  id: number;
+  name: string;
+  author: string | null;
+  genre: string | null;
+  publisher: string | null;
+  description: string | null;
+  cover_url: string | null;
+  volumes: TitleVolume[];
+};
+
+export async function createTitle(payload: TitleMutateRequest): Promise<{ id: number }> {
+  return request<{ id: number }>("/api/v1/kho/titles", {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    token: "manager-demo",
+  });
+}
+
+export async function updateTitle(id: number, payload: TitleMutateRequest): Promise<void> {
+  return request<void>(`/api/v1/kho/titles/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+    token: "manager-demo",
+  });
+}
+
+export async function deleteTitle(id: number): Promise<void> {
+  return request<void>(`/api/v1/kho/titles/${id}`, {
+    method: 'DELETE',
+    token: "manager-demo",
+  });
+}
+
+export async function updateVolume(id: number, payload: VolumeMutateRequest): Promise<void> {
+  return request<void>(`/api/v1/kho/volumes/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+    token: "manager-demo",
+  });
+}
+
+export async function deleteVolume(id: number): Promise<void> {
+  return request<void>(`/api/v1/kho/volumes/${id}`, {
+    method: 'DELETE',
+    token: "manager-demo",
+  });
+}
+
+export async function createItem(payload: ItemCreateRequest): Promise<{ id: string }> {
+  return request<{ id: string }>("/api/v1/kho/items", {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    token: "manager-demo",
+  });
+}
+
+export async function updateItem(id: string, payload: ItemUpdateRequest): Promise<void> {
+  return request<void>(`/api/v1/kho/items/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+    token: "manager-demo",
+  });
+}
+
+export async function deleteItem(id: string): Promise<void> {
+  return request<void>(`/api/v1/kho/items/${id}`, {
+    method: 'DELETE',
+    token: "manager-demo",
+  });
+}
+
+export async function fetchTitlesWithVolumes(q?: string, token = "manager-demo"): Promise<TitleEntry[]> {
+  const path = q
+    ? `/api/v1/kho/titles?q=${encodeURIComponent(q)}`
+    : "/api/v1/kho/titles";
+  return request<TitleEntry[]>(path, { method: "GET", token });
 }
