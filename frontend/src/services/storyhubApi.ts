@@ -209,8 +209,8 @@ export type ConvertToRentalRequest = {
   volume_id: number;
   quantity: number;
   request_id: string;
-token: string;
 };
+
 
 export type CreateVolumeRequest = {
   title_name: string;
@@ -537,18 +537,19 @@ export async function convertToRental(
   payload: ConvertToRentalRequest,
   token = "manager-demo",
 ): Promise<ConvertToRentalPayload> {
-  return request<ConvertToRentalPayload>("/api/v1/inventory/convert-to-rental", {
+  return request<ConvertToRentalPayload>("/api/v1/kho/convert-to-rental", {
     method: "POST",
     body: JSON.stringify(payload),
     token,
   });
 }
 
+
 export async function createVolume(
   payload: CreateVolumeRequest,
   token = "manager-demo",
 ): Promise<CreateVolumePayload> {
-  return request<CreateVolumePayload>("/api/v1/inventory/volumes", {
+  return request<CreateVolumePayload>("/api/v1/kho/volumes", {
     method: "POST",
     body: JSON.stringify(payload),
     token,
@@ -559,7 +560,7 @@ export async function importCoverImage(
   payload: ImportCoverImageRequest,
   token = "manager-demo",
 ): Promise<ImportCoverImagePayload> {
-  return request<ImportCoverImagePayload>("/api/v1/inventory/covers/import", {
+  return request<ImportCoverImagePayload>("/api/v1/kho/covers/import", {
     method: "POST",
     body: JSON.stringify(payload),
     token,
@@ -572,7 +573,7 @@ export async function updateVolumePrice(
   token = "manager-demo",
 ): Promise<UpdateVolumePricePayload> {
   return request<UpdateVolumePricePayload>(
-    `/api/v1/inventory/volumes/${volumeId}/price`,
+    `/api/v1/kho/volumes/${volumeId}/price`,
     {
       method: "PATCH",
       body: JSON.stringify(payload),
@@ -665,7 +666,7 @@ export async function fetchInventoryItems(
   q?: string,
   token = "cashier-demo",
 ): Promise<InventoryItemListItem[]> {
-  const path = q ? `/api/v1/inventory/items?q=${encodeURIComponent(q)}` : "/api/v1/inventory/items";
+  const path = q ? `/api/v1/kho/items?q=${encodeURIComponent(q)}` : "/api/v1/kho/items";
   return request<InventoryItemListItem[]>(path, {
     method: "GET",
     token,
@@ -677,7 +678,7 @@ export async function fetchInventoryItemStatus(
   token = "cashier-demo",
 ): Promise<InventoryItemStatusPayload> {
   return request<InventoryItemStatusPayload>(
-    `/api/v1/inventory/items/${encodeURIComponent(itemId)}/status`,
+    `/api/v1/kho/items/${encodeURIComponent(itemId)}/status`,
     {
       method: "GET",
       token,
@@ -794,8 +795,10 @@ export async function login(payload: LoginRequest): Promise<LoginPayload> {
 export type TitleItem = {
   id: string;
   status: string;
+  type: string;
   condition_level: number;
   notes: string | null;
+
   has_barcode: boolean;
   version_no: number;
   reserved_at: string | null;

@@ -499,6 +499,7 @@ async def convert_to_rental(
 ) -> ResponseEnvelope[ConvertToRentalPayload] | dict[str, object]:
     auth.require_role("manager","owner")
     auth.require_scope("inventory:write")
+    print(f"[DEBUG] Request ID: {payload.request_id}")
 
     cached = await get_cached_response(session, scope="inventory.convert", request_id=payload.request_id)
     if cached is not None:
@@ -509,12 +510,18 @@ async def convert_to_rental(
 
     async with session.begin():
         vol_result = await session.execute(
-            text("SELECT id, retail_stock FROM volume WHERE id = :vid AND deleted_at IS NULL"),
+            text("SELECT id, retail_stock FROM volume WHERE CAST(id AS INTEGER) = CAST(:vid AS INTEGER) AND deleted_at IS NULL"),
             {"vid": payload.volume_id}
         )
+
         volume_row = vol_result.mappings().first()
         if not volume_row:
-            raise AppError(code="VOLUME_NOT_FOUND", message="Không tìm thấy tập truyện tương ứng với ID đã cung cấp.", status_code=404)
+            raise AppError(
+                code="VOLUME_NOT_FOUND", 
+                message=f"Không tìm thấy tập truyện tương ứng với ID={payload.volume_id}. Vui lòng liên hệ hỗ trợ kỹ thuật.", 
+                status_code=404
+            )
+
             
         if volume_row["retail_stock"] < payload.quantity:
             raise AppError(code="INSUFFICIENT_STOCK", message="Số lượng tồn kho hiện tại không đủ để thực hiện chuyển đổi sang hàng thuê.", status_code=409)
@@ -530,11 +537,13 @@ async def convert_to_rental(
             new_skus.append(new_sku)
             await session.execute(
                 text(
-                    """INSERT INTO item (id, volume_id, condition_level, status, health_percent) 
-                       VALUES (:id, :vid, 100, 'available', 100)"""
+                    """INSERT INTO item (id, volume_id, condition_level, status, health_percent, type) 
+                       VALUES (:id, :vid, 100, 'available', 100, 'rental')"""
                 ),
                 {"id": new_sku, "vid": payload.volume_id}
             )
+
+
 
         ip_addr, device = get_request_meta(request)
         await write_audit_log(session, actor_user_id=auth.user_id, action="INVENTORY_TO_RENTAL", entity_type="volume", entity_id=str(payload.volume_id), before={"retail_stock": volume_row["retail_stock"]}, after={"retail_stock": volume_row["retail_stock"] - payload.quantity, "new_skus": new_skus}, ip_address=ip_addr, device_id=device)
@@ -641,7 +650,7 @@ async def create_volume(
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
 ) -> ResponseEnvelope[CreateVolumePayload] | dict[str, object]:
-    auth.require_role("manager")
+    auth.require_role("manager","owner")
     auth.require_scope("inventory:write")
 
     normalized_title_name = payload.title_name.strip()
@@ -945,12 +954,14 @@ async def update_volume_price(
 class TitleItemRow(BaseModel):
     id: str
     status: str
+    type: str # retail|rental
     condition_level: int
     notes: str | None
     has_barcode: bool  # True = có mã vạch thật → được phép thuê
     version_no: int
     reserved_at: str | None
     reservation_expire_at: str | None
+
 
 class TitleVolumeRow(BaseModel):
     id: int
@@ -1029,9 +1040,10 @@ async def list_titles_with_volumes(
         vol_id_placeholders = ",".join(str(i) for i in volume_ids)
         item_result = await session.execute(
             text(f"""
-                SELECT id, volume_id, status, condition_level, notes, version_no, reserved_at, reservation_expire_at
+                SELECT id, volume_id, status, type, condition_level, notes, version_no, reserved_at, reservation_expire_at
                 FROM item
                 WHERE volume_id IN ({vol_id_placeholders}) AND deleted_at IS NULL
+
                 ORDER BY volume_id ASC, id ASC
             """)
         )
@@ -1045,6 +1057,7 @@ async def list_titles_with_volumes(
             row = TitleItemRow(
                 id=item_id,
                 status=str(ir["status"]),
+                type=str(ir.get("type", "retail")),
                 condition_level=int(ir["condition_level"]),
                 notes=ir["notes"],
                 has_barcode=is_real_barcode,
@@ -1052,6 +1065,7 @@ async def list_titles_with_volumes(
                 reserved_at=str(ir["reserved_at"]) if ir["reserved_at"] else None,
                 reservation_expire_at=str(ir["reservation_expire_at"]) if ir["reservation_expire_at"] else None,
             )
+
             items_by_volume.setdefault(vid, []).append(row)
             if str(ir["status"]) == "available":
                 rental_count_by_volume[vid] = rental_count_by_volume.get(vid, 0) + 1
@@ -1278,7 +1292,9 @@ async def delete_volume(
 class ItemCreateRequest(BaseModel):
     volume_id: int
     id: str | None = None # barcode. If none, auto-generate RNT-{uuid}
+    type: Literal["retail", "rental"] = "retail"
     condition_level: int = Field(ge=0, le=100, default=100)
+
     notes: str | None = None
     version_no: int = Field(default=1)
 
@@ -1303,16 +1319,18 @@ async def create_item(
 
     await session.execute(
         text("""
-            INSERT INTO item (id, volume_id, status, condition_level, health_percent, version_no, notes)
-            VALUES (:id, :vid, 'available', :cond, :cond, :ver, :notes)
+            INSERT INTO item (id, volume_id, status, type, condition_level, health_percent, version_no, notes)
+            VALUES (:id, :vid, 'available', :type, :cond, :cond, :ver, :notes)
         """),
         {
             "id": item_id,
             "vid": payload.volume_id,
+            "type": payload.type,
             "cond": payload.condition_level,
             "ver": payload.version_no,
             "notes": payload.notes
         }
+
     )
     await session.commit()
     await write_audit_log(

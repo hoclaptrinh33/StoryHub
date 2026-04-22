@@ -81,7 +81,9 @@ async function loadTitles(q?: string) {
           id: it.id,
           volume: String(vol.volume_number),
           status: it.status,
+          type: it.type,
           condition: it.condition_level >= 80 ? 'Tốt' : it.condition_level >= 50 ? 'Trung bình' : 'Kém',
+
           note: it.notes ?? '',
           has_barcode: it.has_barcode,
           can_rent: it.has_barcode, 
@@ -321,19 +323,27 @@ const openConvertRental = () => {
 const saveConvertRental = async () => {
   if (!selectedVolume.value) return;
   try {
-    await convertToRental({
-      volume_id: selectedVolume.value.id,
-      quantity: formConvert.value.quantity,
-      request_id: buildRequestId('convert'),
-      token: token.value,
-    }, token.value);
+    await convertToRental(
+      {
+        volume_id: selectedVolume.value.id,
+        quantity: formConvert.value.quantity,
+        request_id: buildRequestId('convert'),
+      },
+      token.value,   // token được truyền riêng, không lồng trong payload
+    );
     addNotification('success', 'Chuyển truyện thuê thành công!');
     isConvertRentalModalOpen.value = false;
     await loadTitles();
-    const updatedBook = books.value.find(b => b.id === selectedBook.value?.id);
-    if (updatedBook) selectedVolume.value = updatedBook.volumes.find((v: any) => v.id === selectedVolume.value?.id);
-  } catch(err: any) {
-    addNotification('error', err.message || 'Lỗi lưu bản sao');
+    // Cập nhật lại selectedVolume sau khi load lại dữ liệu
+    const updatedBook = books.value.find((b: any) => b.id === selectedBook.value?.id);
+
+    if (updatedBook) {
+      selectedVolume.value = updatedBook.volumes.find(
+        (v: any) => v.id === selectedVolume.value?.id
+      );
+    }
+  } catch (err: any) {
+    addNotification('error', err.message || 'Lỗi khi chuyển đổi');
   }
 };
 
@@ -497,10 +507,17 @@ const formatVND = (val: number) => {
         </table>
 
         <template #footer>
-          <button class="btn-secondary" @click="isItemsModalOpen = false">Đóng</button>
-          <button class="btn-primary" @click="openConvertRental" v-if="selectedVolume?.so_luong > 0">Chuyển truyện thuê (Tồn: {{ selectedVolume?.so_luong }})</button>
-          <button class="btn-primary" @click="openAddItem">+ Thêm bản sao mới</button>
-        </template>
+  <button class="btn-secondary" @click="isItemsModalOpen = false">Đóng</button>
+  <!-- Sử dụng retail_stock thay vì so_luong -->
+  <button 
+    class="btn-primary" 
+    @click="openConvertRental" 
+    v-if="selectedVolume?.retail_stock > 0"
+  >
+    Chuyển truyện thuê (Tồn bán: {{ selectedVolume?.retail_stock }})
+  </button>
+  <button class="btn-primary" @click="openAddItem">+ Thêm bản sao mới</button>
+</template>
       </BaseModal>
 
       <!-- Edit/Add Book Modal -->
@@ -616,12 +633,17 @@ const formatVND = (val: number) => {
         @close="isConvertRentalModalOpen = false"
       >
         <div class="form-grid">
-          <div class="form-group full-width">
-            <label>Số lượng muốn chuyển từ kho bán</label>
-            <input v-model.number="formConvert.quantity" type="number" min="1" :max="selectedVolume?.so_luong" />
-            <small style="color: grey;">Lưu ý: Hành động này sẽ trừ hàng tồn bán và tạo mã vạch bản sao mới.</small>
-          </div>
-        </div>
+    <div class="form-group full-width">
+      <label>Số lượng muốn chuyển từ kho bán</label>
+      <input 
+        v-model.number="formConvert.quantity" 
+        type="number" 
+        min="1" 
+        :max="selectedVolume?.retail_stock"   
+      />
+      <small style="color: grey;">Lưu ý: Hành động này sẽ trừ hàng tồn bán và tạo mã vạch bản sao mới.</small>
+    </div>
+  </div>
         <template #footer>
           <button class="btn-secondary" @click="isConvertRentalModalOpen = false">Hủy</button>
           <button class="btn-primary" @click="saveConvertRental">Xác nhận chuyển</button>

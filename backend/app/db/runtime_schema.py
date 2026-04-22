@@ -52,3 +52,15 @@ async def ensure_runtime_tables() -> None:
     async with engine.begin() as connection:
         for statement in _RUNTIME_TABLE_DDL:
             await connection.execute(text(statement))
+            
+        # Ensure 'type' column exists in 'item' table (SQLite only)
+        # This is a safe migration for SQLite that won't fail if the column already exists.
+        try:
+            # PRAGMA is not easily used with AsyncSession execute for checking,
+            # so we use a safe ALTER TABLE within a try-except block.
+            await connection.execute(text("ALTER TABLE item ADD COLUMN type TEXT DEFAULT 'retail'"))
+            print("Successfully added 'type' column to 'item' table.")
+        except Exception:
+            # SQLite throws error if column already exists
+            pass
+
