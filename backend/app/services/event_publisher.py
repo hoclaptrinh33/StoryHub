@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from time import monotonic
 from typing import Any
 from uuid import uuid4
@@ -87,6 +88,63 @@ class EventPublisher:
             payload=payload,
             branch_id=branch_id,
             throttle_seconds=0.2,
+        )
+
+    async def publish_volume_stock_updated(
+        self,
+        *,
+        volume_id: int,
+        new_stock: int,
+        branch_id: str,
+    ) -> None:
+        payload = {
+            "event_id": f"evt-{uuid4().hex}",
+            "volume_id": volume_id,
+            "new_stock": new_stock,
+            "changed_at": datetime.now().isoformat() + "Z",
+        }
+        await self._publish_with_throttle(
+            event_name="volume_stock_updated",
+            event_key=str(volume_id),
+            payload=payload,
+            branch_id=branch_id,
+            throttle_seconds=0.1,
+        )
+
+    async def publish_inventory_data_changed(
+        self,
+        *,
+        reason: str,
+        branch_id: str,
+    ) -> None:
+        payload = {
+            "event_id": f"evt-{uuid4().hex}",
+            "reason": reason,
+            "changed_at": datetime.now().isoformat() + "Z",
+        }
+        await self._deliver_event(
+            event_name="inventory_data_changed",
+            payload=payload,
+            branch_id=branch_id,
+        )
+
+    async def publish_item_mutated(
+        self,
+        *,
+        item_id: str,
+        action: str,
+        branch_id: str,
+    ) -> None:
+        payload = {
+            "event_id": f"evt-{uuid4().hex}",
+            "item_id": item_id,
+            "action": action,
+            "changed_at": datetime.now().isoformat() + "Z",
+        }
+        await self._deliver_event(
+            event_name="item_mutated",
+            payload=payload,
+            branch_id=branch_id,
         )
 
     async def _publish_with_throttle(

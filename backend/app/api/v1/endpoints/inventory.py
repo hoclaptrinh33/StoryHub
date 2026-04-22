@@ -496,6 +496,7 @@ async def convert_to_rental(
     request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ) -> ResponseEnvelope[ConvertToRentalPayload] | dict[str, object]:
     auth.require_role("manager","owner")
     auth.require_scope("inventory:write")
@@ -542,6 +543,7 @@ async def convert_to_rental(
                 ),
                 {"id": new_sku, "vid": payload.volume_id}
             )
+         
 
 
 
@@ -555,6 +557,14 @@ async def convert_to_rental(
     except IntegrityError:
         pass
         
+    await event_publisher.publish_volume_stock_updated(
+        volume_id=payload.volume_id,
+        new_stock=volume_row["retail_stock"] - payload.quantity,
+        branch_id=auth.branch_id
+    )
+    for sku in new_skus:
+        await event_publisher.publish_item_mutated(item_id=sku, action="created", branch_id=auth.branch_id)
+
     return envelope
 
 
@@ -649,6 +659,7 @@ async def create_volume(
     request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ) -> ResponseEnvelope[CreateVolumePayload] | dict[str, object]:
     auth.require_role("manager","owner")
     auth.require_scope("inventory:write")
@@ -838,6 +849,7 @@ async def create_volume(
     except IntegrityError:
         pass
         
+    await event_publisher.publish_inventory_data_changed(reason="volume_created", branch_id=auth.branch_id)
     return envelope
 
 
@@ -848,6 +860,7 @@ async def update_volume_price(
     volume_id: int = Path(gt=0),
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ) -> ResponseEnvelope[UpdateVolumePricePayload] | dict[str, object]:
     auth.require_role("manager", "owner")
     auth.require_scope("inventory:write")
@@ -944,6 +957,11 @@ async def update_volume_price(
             return cached.payload
         raise
 
+    await event_publisher.publish_volume_stock_updated(
+        volume_id=volume_id,
+        new_stock=int(volume_row["retail_stock"]),
+        branch_id=auth.branch_id
+    )
     return envelope
 
 
@@ -1125,6 +1143,7 @@ async def create_new_title(
     payload: TitleMutateRequest,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
     result = await session.execute(
         text("""
@@ -1147,6 +1166,7 @@ async def create_new_title(
         ip_address=None,
         device_id=None,
     )
+    await event_publisher.publish_inventory_data_changed(reason="title_created", branch_id=auth.branch_id)
     return success_response({"id": new_id})
 
 @router.put("/titles/{title_id}")
@@ -1155,6 +1175,7 @@ async def update_title(
     payload: TitleMutateRequest,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
     await session.execute(
         text("""
@@ -1176,6 +1197,7 @@ async def update_title(
         ip_address=None,
         device_id=None,
     )
+    await event_publisher.publish_inventory_data_changed(reason="title_updated", branch_id=auth.branch_id)
     return success_response({"id": title_id})
 
 @router.delete("/titles/{title_id}")
@@ -1183,6 +1205,7 @@ async def delete_title(
     title_id: int,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
     await session.execute(
         text("UPDATE title SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
@@ -1208,6 +1231,7 @@ async def delete_title(
         ip_address=None,
         device_id=None,
     )
+    await event_publisher.publish_inventory_data_changed(reason="title_deleted", branch_id=auth.branch_id)
     return success_response({"deleted": True})
 
 
@@ -1227,6 +1251,7 @@ async def update_volume(
     payload: VolumeMutateRequest,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
     await session.execute(
         text("""
@@ -1254,6 +1279,7 @@ async def update_volume(
         ip_address=None,
         device_id=None,
     )
+    await event_publisher.publish_inventory_data_changed(reason="volume_updated", branch_id=auth.branch_id)
     return success_response({"id": volume_id})
 
 @router.delete("/volumes/{volume_id}")
@@ -1261,6 +1287,7 @@ async def delete_volume(
     volume_id: int,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
     await session.execute(
         text("UPDATE volume SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
@@ -1282,6 +1309,7 @@ async def delete_volume(
         ip_address=None,
         device_id=None,
     )
+    await event_publisher.publish_inventory_data_changed(reason="volume_deleted", branch_id=auth.branch_id)
     return success_response({"deleted": True})
 
 
@@ -1309,6 +1337,7 @@ async def create_item(
     payload: ItemCreateRequest,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session), # noqa: B008
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
     item_id = str(payload.id).strip() if (payload.id is not None and str(payload.id).strip()) else f"RNT-{str(uuid.uuid4()).replace('-', '')[:8].upper()}"
     
@@ -1344,6 +1373,7 @@ async def create_item(
         ip_address=None,
         device_id=None,
     )
+    await event_publisher.publish_item_mutated(item_id=item_id, action="created", branch_id=auth.branch_id)
     return success_response({"id": item_id})
 
 @router.put("/items/{item_id}")
@@ -1352,6 +1382,7 @@ async def update_item(
     payload: ItemUpdateRequest,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
     await session.execute(
         text("""
@@ -1373,6 +1404,7 @@ async def update_item(
         ip_address=None,
         device_id=None,
     )
+    await event_publisher.publish_item_mutated(item_id=item_id, action="updated", branch_id=auth.branch_id)
     return success_response({"id": item_id})
 
 @router.delete("/items/{item_id}")
@@ -1380,6 +1412,7 @@ async def delete_item(
     item_id: str,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
     await session.execute(
         text("UPDATE item SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
@@ -1398,4 +1431,5 @@ async def delete_item(
         ip_address=None,
         device_id=None,
     )
+    await event_publisher.publish_item_mutated(item_id=item_id, action="deleted", branch_id=auth.branch_id)
     return success_response({"deleted": True})

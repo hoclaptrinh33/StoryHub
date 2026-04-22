@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, inject, onMounted } from 'vue';
+import { ref, computed, inject, onMounted, onBeforeUnmount } from 'vue';
 import { 
   fetchTitlesWithVolumes, 
   createTitle as apiCreateTitle,
@@ -13,6 +13,7 @@ import {
   deleteItem as apiDeleteItem,
   convertToRental,
   buildRequestId,
+  resolveRealtimeWsUrl,
 } from '../services/storyhubApi';
 import { useAuthStore } from '../stores/auth';
 
@@ -101,7 +102,7 @@ async function loadTitles(q?: string) {
   }
 }
 
-onMounted(() => loadTitles());
+// Initial load is handled in the combined onMounted below
 
 // ─── Search & Filter ──────────────────────────────────────────────────────────
 const searchQuery = ref('');
@@ -123,6 +124,48 @@ const filteredBooks = computed(() => {
     return matchesSearch && matchesAuthor && matchesPublisher && matchesGenre;
   });
 });
+
+// realtime 
+let ws: WebSocket;
+
+const findVolumeById = (id: number) => {
+  for (const book of books.value) {
+    const vol = book.volumes.find((v: any) => v.id === id);
+    if (vol) return vol;
+  }
+  return null;
+};
+
+const connectWebSocket = () => {
+  ws = new WebSocket(resolveRealtimeWsUrl(token.value));
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    console.log('[Realtime] Received:', data.type, data);
+
+    if (data.type === 'volume_stock_updated') {
+      const volume = findVolumeById(data.volume_id);
+      if (volume) {
+        volume.retail_stock = data.new_stock;
+        addNotification?.('info', `Kho vừa cập nhật: ${volume.name} - Tập ${volume.volume_number} (Tồn: ${data.new_stock})`);
+      }
+    } else if (data.type === 'inventory_data_changed') {
+      console.log('[Realtime] Inventory changed, reloading list...');
+      loadTitles();
+    } else if (data.type === 'item_mutated') {
+      console.log('[Realtime] Item mutated, reloading list...');
+      loadTitles();
+    }
+  };
+  ws.onerror = (err) => console.error('[WebSocket] Error:', err);
+  ws.onclose = () => console.log('[WebSocket] Connection closed');
+};
+
+onMounted(() => { 
+  loadTitles(); 
+  connectWebSocket(); 
+});
+
+onBeforeUnmount(() => ws?.close());
 
 // ─── Modal helpers ────────────────────────────────────────────────────────────
 const openVolumeModal = (book: any) => {

@@ -18,6 +18,9 @@ DEFAULT_SUBSCRIBED_EVENTS = frozenset(
     {
         "item_status_changed",
         "rental_settlement_finished",
+        "inventory_data_changed",
+        "volume_stock_updated",
+        "item_mutated",
     }
 )
 
