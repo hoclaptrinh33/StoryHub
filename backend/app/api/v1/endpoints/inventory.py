@@ -497,7 +497,7 @@ async def convert_to_rental(
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
 ) -> ResponseEnvelope[ConvertToRentalPayload] | dict[str, object]:
-    auth.require_role("manager")
+    auth.require_role("manager","owner")
     auth.require_scope("inventory:write")
 
     cached = await get_cached_response(session, scope="inventory.convert", request_id=payload.request_id)

@@ -263,14 +263,17 @@ const openAddItem = () => {
 };
 const openEditItem = (item: any) => {
   formItem.value = { ...item };
+  formItem.value.status = reverseStatusMap[item.status] || 'available';
   isEditItemModalOpen.value = true;
 };
 const saveItem = async () => {
   try {
     const conditionVal = formItem.value.condition === 'Tốt' ? 100 : formItem.value.condition === 'Trung bình' ? 50 : 20;
-    if (formItem.value.id && !isAddItemModalOpen.value) {
+    const statusToSend = reverseStatusMap[formItem.value.status] || formItem.value.status;
+
+   if (formItem.value.id && !isAddItemModalOpen.value) {
        await apiUpdateItem(formItem.value.id, {
-           status: formItem.value.status,
+           status: statusToSend,
            condition_level: conditionVal,
            notes: formItem.value.note || null,
            request_id: buildRequestId('update-item')
@@ -334,7 +337,23 @@ const saveConvertRental = async () => {
   }
 };
 
+// ─── Format helpers ───────────────────────────────────────────────────────────
+const statusMap: Record<string, string> = {
+  'available': 'Có sẵn',
+  'rented': 'Đã thuê',
+  'maintenance': 'Bảo trì'
+};
 
+const reverseStatusMap: Record<string, string> = {
+  'Có sẵn': 'available',
+  'Đã thuê': 'rented',
+  'Bảo trì': 'maintenance'
+};
+
+// Hàm chuyển đổi hiển thị
+const getStatusText = (status: string): string => {
+  return statusMap[status] || status;
+};
 // Format tiền VND
 const formatVND = (val: number) => {
   if (typeof val !== 'number') return '—';
@@ -459,22 +478,22 @@ const formatVND = (val: number) => {
               <th class="text-center">Hành động</th>
             </tr>
           </thead>
-          <tbody>
-            <tr v-for="items in selectedVolume?.items" :key="items.id" class="clickable-row">
-              <td>{{ items.id }}</td>
-              <td>{{ items.volume }}</td>
-              <td>{{ items.status }}</td>
-              <td>{{ items.condition }}</td>
-              <td>{{ items.start_date }}</td>
-              <td>{{ items.end_date }}</td>
-              <td>{{ items.note }}</td>
-              <td>{{ items.version }}</td>
-              <td class="text-center">
-                <button class="btn-action edit" @click.stop="openEditItem(items)">✏️</button>
-                <button class="btn-action delete" @click.stop="deleteItem(selectedVolume, items.id)">🗑️</button>
-              </td>
-            </tr>
-          </tbody>
+         <tbody>
+  <tr v-for="items in selectedVolume?.items" :key="items.id" class="clickable-row">
+    <td>{{ items.id }}</td>
+    <td>{{ items.volume }}</td>
+    <td>{{ getStatusText(items.status) }}</td>   <!-- Sửa dòng này -->
+    <td>{{ items.condition }}</td>
+    <td>{{ items.start_date }}</td>
+    <td>{{ items.end_date }}</td>
+    <td>{{ items.note }}</td>
+    <td>{{ items.version }}</td>
+    <td class="text-center">
+      <button class="btn-action edit" @click.stop="openEditItem(items)">✏️</button>
+      <button class="btn-action delete" @click.stop="deleteItem(selectedVolume, items.id)">🗑️</button>
+    </td>
+  </tr>
+</tbody>
         </table>
 
         <template #footer>
