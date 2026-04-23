@@ -507,6 +507,7 @@ import {
   fetchCustomers,
   fetchInventoryItems,
   upsertCustomer,
+  autoCreateItem,
   type CheckoutInvoicePayload,
   type CheckoutInvoiceTransactionType,
   type CustomerListItem,
@@ -982,12 +983,31 @@ const getModeMismatchMessage = (productType: InventoryItemListItem["type"]) => {
   return "Item không phù hợp với mode hiện tại.";
 };
 
-const addToCart = (product: InventoryItemListItem, source: "scanner" | "manual") => {
-  if (product.type === 'retail' && (product.stock_quantity ?? 0) <= 0) {
-  playScanAudio('error');
-  addNotification('error', `Sách "${product.name}" đã hết hàng.`);
-  return;
-}
+const ensureProduct = async (rawCode: string): Promise<InventoryItemListItem | undefined> => {
+  const existing = findProductByBarcode(rawCode);
+  if (existing) return existing;
+
+  // Thử auto-create
+  try {
+    const result = await autoCreateItem({
+      barcode: rawCode,
+      request_id: buildRequestId('auto-create'),
+    }, token.value);
+    // Thêm sản phẩm mới vào danh sách availableProducts để lần sau quét nhanh
+    availableProducts.value.push(result.item);
+    return result.item;
+  } catch (e) {
+    // Nếu không tạo được, return undefined để hiển thị lỗi
+    return undefined;
+  }
+};
+
+const addToCart = async (product: InventoryItemListItem | undefined, source: "scanner" | "manual") => {
+  if (!product) {
+    playScanAudio('error');
+    addNotification('error', 'Không thể thêm sản phẩm. Kiểm tra lại mã.');
+    return;
+  }
   
   if (!isProductAllowedInCurrentMode(product)) {
     playScanAudio("error");
@@ -1051,20 +1071,16 @@ const moveSelectedCart = (delta: number) => {
   selectedCartIndex.value = nextIndex;
 };
 
-const handleManualBarcode = () => {
+const handleManualBarcode = async () => {
   const code = manualCode.value.trim();
-  if (!code) {
-    return;
-  }
-
-  const matchedProduct = findProductByBarcode(code);
+  if (!code) return;
+  const matchedProduct = await ensureProduct(code);  // SỬA
   if (!matchedProduct) {
     playScanAudio("error");
-    addNotification("error", `Không tìm thấy sách mã: ${code}`);
+    addNotification("error", `Không tìm thấy hoặc không thể tạo sản phẩm với mã: ${code}`);
   } else {
     addToCart(matchedProduct, "manual");
   }
-
   manualCode.value = "";
 };
 

@@ -319,7 +319,7 @@ async def unified_checkout(
             })
             # Update item status
             await session.execute(
-                text("UPDATE item SET status = 'sold', updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
+                text("UPDATE item SET status = 'sold', deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
                 {"id": it["id"]}
             )
             # Update volume stock
@@ -356,7 +356,7 @@ async def unified_checkout(
             
             if item_to_consume:
                 await session.execute(
-                    text("UPDATE item SET status = 'sold', updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
+                    text("UPDATE item SET status = 'sold', deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
                     {"id": item_to_consume}
                 )
             

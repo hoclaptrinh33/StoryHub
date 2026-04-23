@@ -129,6 +129,12 @@ class ImportCoverPayload(BaseModel):
     cover_url: str
     source: Literal["url", "base64"]
 
+class AutoCreateItemRequest(BaseModel):
+    barcode: str = Field(min_length=1, max_length=50)
+    request_id: str = Field(min_length=6, max_length=128)
+
+class AutoCreateItemPayload(BaseModel):
+    item: InventoryItemListItem
 
 @router.post(
     "/reservations",
@@ -1533,3 +1539,89 @@ async def delete_item(
     )
     await event_publisher.publish_item_mutated(item_id=item_id, action="deleted", branch_id=auth.branch_id)
     return success_response({"deleted": True})
+
+@router.post("/items/auto-create", response_model=ResponseEnvelope[AutoCreateItemPayload])
+async def auto_create_item(
+    payload: AutoCreateItemRequest,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[AutoCreateItemPayload] | dict[str, object]:
+    auth.require_role("cashier", "manager")
+    auth.require_scope("inventory:write")  # cần quyền ghi kho
+
+    barcode = payload.barcode.strip()
+
+    # 1. Kiểm tra xem item đã tồn tại chưa (phòng trường hợp race condition frontend)
+    exist_item = await session.execute(
+        text("SELECT id, volume_id, condition_level, status, item_type FROM item WHERE id = :id AND deleted_at IS NULL"),
+        {"id": barcode}
+    )
+    row = exist_item.mappings().first()
+    if row:
+        # Nếu đã có item, chỉ cần lấy thông tin từ inventory list (gọi lại hàm list)
+        # Nhưng để đơn giản, ta có thể trả về item đã có.
+        # Tuy nhiên để đảm bảo format, ta gọi list_inventory_items với q = barcode
+        items = await list_inventory_items(q=barcode, auth=auth, session=session)
+        if items.data and len(items.data) > 0:
+            return success_response(AutoCreateItemPayload(item=items.data[0]))
+
+    # 2. Thử xem barcode có phải ISBN của Volume không
+    vol_res = await session.execute(
+        text("SELECT id, title_id, volume_number, isbn, p_sell_new, retail_stock FROM volume WHERE isbn = :isbn AND deleted_at IS NULL"),
+        {"isbn": barcode}
+    )
+    volume = vol_res.mappings().first()
+
+    if volume is None:
+        raise AppError(
+            code="BARCODE_NOT_FOUND",
+            message=f"Mã {barcode} không khớp với bất kỳ tập truyện nào. Vui lòng kiểm tra hoặc nhập thủ công.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    # 3. Tạo item mới cho volume này
+    # Sử dụng chính mã vạch làm item ID (vì nó là duy nhất trên cuốn sách)
+    # Đảm bảo item ID không trùng
+    async with session.begin():
+        await session.execute(
+            text("""
+                INSERT INTO item (id, volume_id, condition_level, status, health_percent, item_type, version_no)
+                VALUES (:id, :vid, 100, 'available', 100, 'retail', 1)
+            """),
+            {"id": barcode, "vid": volume["id"]}
+        )
+
+        # Cập nhật retail_stock của volume (tăng 1 vì ta vừa tạo item)
+        await session.execute(
+            text("UPDATE volume SET retail_stock = retail_stock + 1, updated_at = CURRENT_TIMESTAMP WHERE id = :vid"),
+            {"vid": volume["id"]}
+        )
+
+    # Lấy thông tin item vừa tạo
+    new_item_result = await session.execute(
+        text("""
+            SELECT i.id, i.volume_id, i.condition_level, i.status, i.item_type,
+                   t.name AS title_name, v.volume_number, v.isbn, v.p_sell_new
+            FROM item i
+            JOIN volume v ON v.id = i.volume_id
+            JOIN title t ON t.id = v.title_id
+            WHERE i.id = :id
+        """),
+        {"id": barcode}
+    )
+    new_item = new_item_result.mappings().first()
+    if not new_item:
+        raise AppError(code="CREATE_FAILED", message="Không thể tạo item mới.", status_code=500)
+
+    item_data = InventoryItemListItem(
+        id=new_item["id"],
+        volume_id=new_item["volume_id"],
+        name=f"{new_item['title_name']} Tập {new_item['volume_number']}",
+        code=new_item["id"],  # dùng chính id làm code
+        price=compute_sell_price(condition_level=new_item["condition_level"], p_sell_new=new_item["p_sell_new"]),
+        stock_quantity=1,
+        status=new_item["status"],
+        type=new_item["item_type"],
+    )
+
+    return success_response(AutoCreateItemPayload(item=item_data))

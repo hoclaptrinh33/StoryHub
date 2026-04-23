@@ -487,6 +487,15 @@ export type RentalSettlementStatusPayload = {
   contract_status: "active" | "partial_returned" | "closed" | "overdue" | "cancelled";
 };
 
+export type AutoCreateItemRequest = {
+  barcode: string;
+  request_id: string;
+};
+
+export type AutoCreateItemPayload = {
+  item: InventoryItemListItem;
+};
+
 export function buildRequestId(scope: string): string {
   const normalized = scope.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
   const randomPart = Math.random().toString(36).slice(2, 8);
@@ -898,4 +907,15 @@ export async function fetchTitlesWithVolumes(q?: string, token = "manager-demo")
     ? `/api/v1/kho/titles?q=${encodeURIComponent(q)}`
     : "/api/v1/kho/titles";
   return request<TitleEntry[]>(path, { method: "GET", token });
+}
+
+export async function autoCreateItem(
+  payload: AutoCreateItemRequest,
+  token = "cashier-demo",
+): Promise<AutoCreateItemPayload> {
+  return request<AutoCreateItemPayload>("/api/v1/kho/items/auto-create", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    token,
+  });
 }
