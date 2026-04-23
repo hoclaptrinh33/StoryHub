@@ -74,77 +74,121 @@
             </h3>
           </div>
 
-          <div class="customer-smart-wrap" :class="{ alert: showCustomerWarning }">
-            <label for="customer-smart-input">Khách hàng</label>
-            <div class="smart-input-row">
-              <span class="material-icons">manage_search</span>
-              <input
-                id="customer-smart-input"
-                ref="customerSmartInputRef"
-                v-model="customerQuery"
-                type="text"
-                placeholder="Quét thẻ / nhập SĐT / tên khách..."
-                autocomplete="off"
-                @focus="customerDropdownOpen = customerMatches.length > 0"
-              />
-              <button
-                v-if="customerObj"
-                type="button"
-                class="chip-clear"
-                @click="clearCustomerSelection"
-                aria-label="Bỏ chọn khách"
+          <!-- Form 3 ô thông tin khách hàng -->
+          <div class="customer-form-wrap" :class="{ alert: showCustomerWarning }">
+
+            <!-- ô Tên: có dropdown search -->
+            <div class="customer-field-wrap">
+              <label for="customer-name-input">Họ tên khách</label>
+              <div class="customer-field-row">
+                <span class="material-icons">person_search</span>
+                <input
+                  id="customer-name-input"
+                  ref="customerNameInputRef"
+                  v-model="customerNameInput"
+                  type="text"
+                  placeholder="Nhập tên khách..."
+                  autocomplete="off"
+                  :disabled="!!customerObj"
+                  @input="onNameInput"
+                  @focus="nameDropdownOpen = nameMatches.length > 0"
+                />
+                <button
+                  v-if="customerObj"
+                  type="button"
+                  class="chip-clear"
+                  @click="clearCustomerSelection"
+                  aria-label="Bỏ chọn khách"
+                >
+                  <span class="material-icons">close</span>
+                </button>
+              </div>
+              <!-- Dropdown gợi ý theo Tên -->
+              <div
+                v-if="nameDropdownOpen && nameMatches.length > 0 && !customerObj"
+                class="customer-dropdown"
               >
-                <span class="material-icons">close</span>
-              </button>
+                <button
+                  v-for="c in nameMatches"
+                  :key="c.id"
+                  type="button"
+                  class="customer-option"
+                  @click="selectCustomer(c, false)"
+                >
+                  <span class="material-icons">account_circle</span>
+                  <span class="text">
+                    <strong>{{ c.name }}</strong>
+                    <small>{{ c.phone }}</small>
+                  </span>
+                </button>
+              </div>
             </div>
 
+            <!-- ô SĐT: có dropdown search -->
+            <div class="customer-field-wrap">
+              <label for="customer-phone-input">Số điện thoại</label>
+              <div class="customer-field-row">
+                <span class="material-icons">phone</span>
+                <input
+                  id="customer-phone-input"
+                  v-model="customerPhoneInput"
+                  type="text"
+                  placeholder="Nhập số điện thoại..."
+                  autocomplete="off"
+                  :disabled="!!customerObj"
+                  @input="onPhoneInput"
+                  @focus="phoneDropdownOpen = phoneMatches.length > 0"
+                />
+              </div>
+              <!-- Dropdown gợi ý theo SĐT -->
+              <div
+                v-if="phoneDropdownOpen && phoneMatches.length > 0 && !customerObj"
+                class="customer-dropdown"
+              >
+                <button
+                  v-for="c in phoneMatches"
+                  :key="c.id"
+                  type="button"
+                  class="customer-option"
+                  @click="selectCustomer(c, false)"
+                >
+                  <span class="material-icons">account_circle</span>
+                  <span class="text">
+                    <strong>{{ c.name }}</strong>
+                    <small>{{ c.phone }}</small>
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <!-- ô Địa chỉ -->
+            <div class="customer-field-wrap">
+              <label for="customer-address-input">Địa chỉ</label>
+              <div class="customer-field-row">
+                <span class="material-icons">home</span>
+                <input
+                  id="customer-address-input"
+                  v-model="customerAddressInput"
+                  type="text"
+                  placeholder="Địa chỉ liên hệ..."
+                  autocomplete="off"
+                  :disabled="!!customerObj"
+                />
+              </div>
+            </div>
+
+            <!-- Chip hiển thị khi đã chọn khách từ DB -->
             <div v-if="customerObj" class="customer-selected-chip">
               <span class="material-icons">verified</span>
               <strong>{{ customerObj.name }}</strong>
               <span>• {{ customerObj.phone }}</span>
+              <span v-if="customerObj.address" class="chip-address">• {{ customerObj.address }}</span>
             </div>
 
-            <div
-              v-if="customerDropdownOpen && customerMatches.length > 0 && !customerObj"
-              class="customer-dropdown"
-            >
-              <button
-                v-for="customer in customerMatches"
-                :key="customer.id"
-                type="button"
-                class="customer-option"
-                @click="selectCustomer(customer, false)"
-              >
-                <span class="material-icons">account_circle</span>
-                <span class="text">
-                  <strong>{{ customer.name }}</strong>
-                  <small>{{ customer.phone }}</small>
-                </span>
-              </button>
-            </div>
-
-            <div
-              v-if="canCreateQuickCustomer && !customerObj"
-              class="quick-create-wrap"
-            >
-              <p>
-                Không tìm thấy khách phù hợp.
-                <strong>Tạo nhanh từ số {{ inferredPhone }}</strong>
-              </p>
-              <button
-                class="btn-secondary"
-                type="button"
-                :disabled="isCreatingCustomer"
-                @click="createAndSelectCustomer"
-              >
-                <span class="material-icons">person_add</span>
-                {{ isCreatingCustomer ? "Đang tạo..." : "Tạo khách mới nhanh" }}
-              </button>
-            </div>
-
+            <!-- Cảnh báo khi thiếu thông tin -->
             <p v-if="showCustomerWarning" class="inline-warning">
               <span class="material-icons">warning_amber</span>
-              Cần chọn khách để thuê sách.
+              {{ customerWarningMessage }}
             </p>
           </div>
 
@@ -561,11 +605,19 @@ const cart = ref<InventoryItemListItem[]>([]);
 const selectedCartIndex = ref(-1);
 
 const selectedCustomerId = ref<number | null>(null);
-const customerQuery = ref("");
-const customerDropdownOpen = ref(false);
+// 3 ô nhập liệu khách hàng
+const customerNameInput = ref("");
+const customerPhoneInput = ref("");
+const customerAddressInput = ref("");
+// trạng thái dropdown
+const nameDropdownOpen = ref(false);
+const phoneDropdownOpen = ref(false);
 const isCreatingCustomer = ref(false);
-const isSyncingCustomerQuery = ref(false);
+const isSyncingCustomerFields = ref(false);
 const hasShownRentalWarning = ref(false);
+// debounce timer refs
+let nameDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let phoneDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 const isInvoiceModalOpen = ref(false);
 const isInvoiceLoading = ref(false);
@@ -582,7 +634,7 @@ const rentalDays = ref(3);
 
 const manualCode = ref("");
 const manualBarcodeRef = ref<HTMLInputElement | null>(null);
-const customerSmartInputRef = ref<HTMLInputElement | null>(null);
+const customerNameInputRef = ref<HTMLInputElement | null>(null);
 const lastRentalContractId = ref("");
 const realtimeConflictCodes = ref<string[]>([]);
 const lastScannedCode = computed(() => scannerStore.lastScannedCode);
@@ -656,36 +708,30 @@ const customerObj = computed(() => {
   return customers.value.find((customer) => customer.id === selectedCustomerId.value) ?? null;
 });
 
-const customerMatches = computed(() => {
-  if (customerObj.value) {
-    return [];
-  }
-
-  const query = customerQuery.value.trim().toLowerCase();
-  const queryDigits = normalizePhone(customerQuery.value);
-  if (!query && !queryDigits) {
-    return [];
-  }
-
-  return customers.value
-    .filter((customer) => {
-      const byName = query ? customer.name.toLowerCase().includes(query) : false;
-      const byPhone = queryDigits ? customer.phone.includes(queryDigits) : false;
-      return byName || byPhone;
-    })
-    .slice(0, 6);
+// Match theo tên từ local cache
+const nameMatches = computed(() => {
+  if (customerObj.value || isSyncingCustomerFields.value) return [];
+  const q = customerNameInput.value.trim().toLowerCase();
+  if (!q || q.length < 2) return [];
+  return customers.value.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 6);
 });
 
-const inferredPhone = computed(() => normalizePhone(customerQuery.value));
-
-const canCreateQuickCustomer = computed(() => {
-  return (
-    !customerObj.value &&
-    customerQuery.value.trim().length > 0 &&
-    customerMatches.value.length === 0 &&
-    inferredPhone.value.length >= 8
-  );
+// Match theo số điện thoại từ local cache
+const phoneMatches = computed(() => {
+  if (customerObj.value || isSyncingCustomerFields.value) return [];
+  const digits = customerPhoneInput.value.replace(/\D/g, "");
+  if (!digits || digits.length < 3) return [];
+  return customers.value.filter((c) => c.phone.includes(digits)).slice(0, 6);
 });
+
+// Kiểm tra khách mới nhập tay có đủ 3 ô chưa
+const isNewCustomerComplete = computed(() =>
+  !customerObj.value &&
+  customerNameInput.value.trim().length >= 2 &&
+  customerPhoneInput.value.replace(/\D/g, "").length >= 8 &&
+  customerAddressInput.value.trim().length >= 3,
+);
+
 
 const salesTotal = computed(() => cart.value.filter((item) => item.type === "retail").reduce((acc, item) => acc + item.price, 0));
 const rentalsTotal = computed(() => cart.value.filter((item) => item.type === "rental").reduce((acc, item) => acc + item.price, 0));
@@ -695,7 +741,20 @@ const total = computed(() => salesTotal.value + rentalsTotal.value + depositTota
 const splitTotal = computed(() => cashAmount.value + transferAmount.value);
 const splitDelta = computed(() => total.value - splitTotal.value);
 const hasRentalItems = computed(() => cart.value.some((item) => item.type === "rental"));
-const showCustomerWarning = computed(() => hasRentalItems.value && !customerObj.value);
+// Cảnh báo khi giỏ có sách thuê nhưng chưa đủ thông tin khách
+const showCustomerWarning = computed(() => {
+  if (!hasRentalItems.value) return false;
+  if (customerObj.value) return false; // đã chọn khách từ DB -> OK
+  return !isNewCustomerComplete.value;  // khách mới -> cần đủ 3 ô
+});
+
+// Tin nhắn cảnh báo cụ thể
+const customerWarningMessage = computed(() => {
+  if (!customerNameInput.value.trim()) return "Vui lòng nhập họ tên khách hàng.";
+  if (customerPhoneInput.value.replace(/\D/g, "").length < 8) return "Số điện thoại chưa hợp lệ (tối thiểu 8 số).";
+  if (customerAddressInput.value.trim().length < 3) return "Vui lòng nhập địa chỉ liên hệ.";
+  return "Cần điền đủ thông tin khách hàng.";
+});
 
 const isSplitMatched = computed(() => {
   if (!isSplitPayment.value) {
@@ -706,24 +765,15 @@ const isSplitMatched = computed(() => {
 });
 
 const canSubmitCheckout = computed(() => {
-  if (cart.value.length === 0) {
-    return false;
+  if (cart.value.length === 0) return false;
+  if (hasRentalItems.value) {
+    // Phải có khách: hoặc chọn từ DB hoặc nhập mới đủ 3 ô
+    if (!customerObj.value && !isNewCustomerComplete.value) return false;
+    if (rentalDays.value < 1) return false;
   }
-  if (hasRentalItems.value && !customerObj.value) {
-    return false;
-  }
-  if (hasRentalItems.value && rentalDays.value < 1) {
-    return false;
-  }
-  if (!isSplitMatched.value) {
-    return false;
-  }
-  if (isInitialLoading.value) {
-    return false;
-  }
-  if (hasRealtimeConflict.value) {
-    return false;
-  }
+  if (!isSplitMatched.value) return false;
+  if (isInitialLoading.value) return false;
+  if (hasRealtimeConflict.value) return false;
   return true;
 });
 
@@ -784,14 +834,19 @@ const clearRecoverableError = () => {
   recoverableError.value = null;
 };
 
+// Chọn khách từ dropdown: auto-fill cả 3 ô
 const selectCustomer = (customer: CustomerListItem, autoSelected: boolean) => {
   selectedCustomerId.value = customer.id;
-  isSyncingCustomerQuery.value = true;
-  customerQuery.value = `${customer.name} - ${customer.phone}`;
-  customerDropdownOpen.value = false;
+  isSyncingCustomerFields.value = true;
+  customerNameInput.value = customer.name;
+  customerPhoneInput.value = customer.phone;
+  // address có thể không có trong CustomerListItem, để trống nếu vậy
+  customerAddressInput.value = (customer as unknown as { address?: string }).address ?? "";
+  nameDropdownOpen.value = false;
+  phoneDropdownOpen.value = false;
 
   queueMicrotask(() => {
-    isSyncingCustomerQuery.value = false;
+    isSyncingCustomerFields.value = false;
   });
 
   if (autoSelected) {
@@ -799,49 +854,30 @@ const selectCustomer = (customer: CustomerListItem, autoSelected: boolean) => {
   }
 };
 
+// Xóa lựa chọn khách, reset cả 3 ô
 const clearCustomerSelection = () => {
   selectedCustomerId.value = null;
-  customerQuery.value = "";
-  customerDropdownOpen.value = false;
+  customerNameInput.value = "";
+  customerPhoneInput.value = "";
+  customerAddressInput.value = "";
+  nameDropdownOpen.value = false;
+  phoneDropdownOpen.value = false;
 };
 
-const createAndSelectCustomer = async () => {
-  if (!canCreateQuickCustomer.value) {
-    return;
-  }
+// Debounce 300ms khi gõ vào ô Tên
+const onNameInput = () => {
+  if (nameDebounceTimer) clearTimeout(nameDebounceTimer);
+  nameDebounceTimer = setTimeout(() => {
+    nameDropdownOpen.value = nameMatches.value.length > 0;
+  }, 300);
+};
 
-  const phone = inferredPhone.value;
-  const fallbackName = `Khách ${phone.slice(-4)}`;
-  const nameFromQuery = customerQuery.value.trim().replace(/\d/g, "").trim();
-  const name = nameFromQuery.length > 1 ? nameFromQuery : fallbackName;
-
-  isCreatingCustomer.value = true;
-  try {
-    const created = await upsertCustomer(phone, {
-      name,
-      membership_level: "regular",
-      request_id: buildRequestId("crm-upsert"),
-    });
-
-    const newCustomer: CustomerListItem = {
-      id: Number(created.customer_id),
-      name: created.name,
-      phone: created.phone,
-      membership_level: created.membership_level,
-      deposit_balance: created.deposit_balance,
-      debt: created.debt,
-      blacklist_flag: created.blacklist_flag,
-    };
-
-    customers.value.unshift(newCustomer);
-    selectCustomer(newCustomer, false);
-    addNotification("success", `Đã tạo nhanh khách hàng: ${newCustomer.name}`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Không thể tạo khách mới";
-    addNotification("error", message);
-  } finally {
-    isCreatingCustomer.value = false;
-  }
+// Debounce 300ms khi gõ vào ô SĐT
+const onPhoneInput = () => {
+  if (phoneDebounceTimer) clearTimeout(phoneDebounceTimer);
+  phoneDebounceTimer = setTimeout(() => {
+    phoneDropdownOpen.value = phoneMatches.value.length > 0;
+  }, 300);
 };
 
 const normalizeSplitAmounts = () => {
@@ -1199,8 +1235,39 @@ const confirmCheckout = async () => {
   clearRecoverableError();
 
   try {
+    // Nếu có sách thuê và khách chưa có trong DB → tự động upsert trước
+    let resolvedCustomerId = selectedCustomerId.value;
+    if (hasRentalItems.value && !resolvedCustomerId && isNewCustomerComplete.value) {
+      const phone = customerPhoneInput.value.replace(/\D/g, "");
+      isCreatingCustomer.value = true;
+      try {
+        const created = await upsertCustomer(phone, {
+          name: customerNameInput.value.trim(),
+          membership_level: "regular",
+          address: customerAddressInput.value.trim(),
+          request_id: buildRequestId("crm-upsert"),
+        });
+        resolvedCustomerId = Number(created.customer_id);
+        // Cập nhật local cache để hiển thị chip xác nhận
+        const newCustomer: CustomerListItem = {
+          id: resolvedCustomerId,
+          name: created.name,
+          phone: created.phone,
+          membership_level: created.membership_level,
+          deposit_balance: created.deposit_balance,
+          debt: created.debt,
+          blacklist_flag: created.blacklist_flag,
+        };
+        customers.value.unshift(newCustomer);
+        selectedCustomerId.value = resolvedCustomerId;
+        addNotification("info", `Đã lưu khách hàng mới: ${created.name}`);
+      } finally {
+        isCreatingCustomer.value = false;
+      }
+    }
+
     const response = await unifiedCheckout({
-      customer_id: selectedCustomerId.value,
+      customer_id: resolvedCustomerId,
       scanned_codes: cart.value.map((item) => item.code),
       discount_type: "none",
       discount_value: 0,
@@ -1238,6 +1305,7 @@ const confirmCheckout = async () => {
     isSubmittingCheckout.value = false;
   }
 };
+
 
 const retryCheckout = () => {
   if (!isSubmittingCheckout.value) {
@@ -1328,27 +1396,8 @@ watch([total, paymentMethod, isSplitPayment], () => syncSinglePaymentAmount(), {
   immediate: true,
 });
 
-watch(customerQuery, (value) => {
-  if (isSyncingCustomerQuery.value) {
-    return;
-  }
 
-  if (selectedCustomerId.value !== null) {
-    selectedCustomerId.value = null;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    customerDropdownOpen.value = false;
-    return;
-  }
-
-  customerDropdownOpen.value = true;
-  if (customerMatches.value.length === 1 && trimmed.length >= 4) {
-    selectCustomer(customerMatches.value[0], true);
-  }
-});
-
+// Khi giỏ hàng có sách thuê, nhắc người dùng điền thông tin khách
 watch(
   () => hasRentalItems.value,
   (hasRental) => {
@@ -1357,12 +1406,13 @@ watch(
       return;
     }
 
-    if (!customerObj.value && !hasShownRentalWarning.value) {
-      addNotification("warning", "Giỏ có sách thuê: cần chọn khách hàng trước khi xuất hóa đơn.");
+    if (!customerObj.value && !isNewCustomerComplete.value && !hasShownRentalWarning.value) {
+      addNotification("warning", "Giỏ có sách thuê: vui lòng điền đủ Tên, SĐT, Địa chỉ khách hàng.");
       hasShownRentalWarning.value = true;
     }
   },
 );
+
 
 watch(
   () => cart.value.map((item) => item.id),
@@ -1618,40 +1668,67 @@ tr.realtime-conflict .details strong {
   font-size: 1rem;
 }
 
-.customer-smart-wrap {
+/* Form 3 ô khách hàng */
+.customer-form-wrap {
   position: relative;
-  padding: 14px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.customer-smart-wrap label {
+.customer-field-wrap {
+  position: relative;
+}
+
+.customer-field-wrap label {
   display: block;
-  font-size: 0.86rem;
+  font-size: 0.82rem;
   color: #475569;
-  margin-bottom: 7px;
+  margin-bottom: 5px;
   font-weight: 700;
 }
 
-.smart-input-row {
+.customer-field-row {
   border: 1.5px solid #cbd5e1;
-  border-radius: 12px;
+  border-radius: 10px;
   background: white;
-  padding: 8px 10px;
+  padding: 7px 10px;
   display: flex;
   align-items: center;
   gap: 8px;
+  transition: border-color 0.15s;
 }
 
-.smart-input-row input {
+.customer-field-row:focus-within {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.customer-field-row input {
   border: none;
   outline: none;
   width: 100%;
   font-family: inherit;
   font-weight: 600;
+  font-size: 0.9rem;
+  background: transparent;
 }
 
+.customer-field-row input:disabled {
+  color: #64748b;
+  cursor: not-allowed;
+}
+
+.customer-form-wrap.alert .customer-field-row {
+  border-color: #facc15;
+  box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.2);
+}
+
+
 .chip-clear {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border: none;
   border-radius: 999px;
   background: #f1f5f9;
@@ -1659,31 +1736,33 @@ tr.realtime-conflict .details strong {
   cursor: pointer;
   display: grid;
   place-items: center;
-}
-
-.customer-smart-wrap.alert .smart-input-row {
-  border-color: #facc15;
-  box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.2);
+  flex-shrink: 0;
 }
 
 .customer-selected-chip {
-  margin-top: 10px;
+  margin-top: 2px;
   border-radius: 10px;
   border: 1px solid #bfdbfe;
   background: #eff6ff;
   color: #1d4ed8;
   padding: 8px 10px;
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
+  flex-wrap: wrap;
+}
+
+.chip-address {
+  color: #475569;
+  font-size: 0.82rem;
 }
 
 .customer-dropdown {
   position: absolute;
-  left: 14px;
-  right: 14px;
-  top: 96px;
+  left: 0;
+  right: 0;
+  top: calc(100% + 2px);
   border-radius: 12px;
   border: 1px solid #e2e8f0;
   background: white;
@@ -1718,19 +1797,7 @@ tr.realtime-conflict .details strong {
   color: #64748b;
 }
 
-.quick-create-wrap {
-  margin-top: 10px;
-  border-radius: 10px;
-  border: 1px dashed #93c5fd;
-  background: #f0f9ff;
-  padding: 10px;
-}
 
-.quick-create-wrap p {
-  margin: 0 0 8px;
-  color: #0c4a6e;
-  font-size: 0.84rem;
-}
 
 .inline-warning {
   margin: 10px 0 0;

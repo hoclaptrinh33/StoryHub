@@ -641,9 +641,14 @@ export async function fetchReturnableRentalContracts(
 }
 
 export async function fetchCustomers(
+  q?: string,
   token = "cashier-demo",
 ): Promise<CustomerListItem[]> {
-  return request<CustomerListItem[]>("/api/v1/customers/", {
+  // Xây dựng query string nếu có từ khóa tìm kiếm
+  const path = q
+    ? `/api/v1/customers/?q=${encodeURIComponent(q.trim())}`
+    : "/api/v1/customers/";
+  return request<CustomerListItem[]>(path, {
     method: "GET",
     token,
   });
