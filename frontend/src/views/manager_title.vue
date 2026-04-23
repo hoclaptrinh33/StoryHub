@@ -619,10 +619,6 @@ const formatVND = (val: number) => {
             <input v-model="formVolume.volume" type="text" placeholder="105" />
           </div>
           <div class="form-group">
-            <label>Số lượng</label>
-            <input v-model="formVolume.so_luong" type="number" />
-          </div>
-          <div class="form-group">
             <label>Giá</label>
             <input v-model="formVolume.price" type="text" placeholder="20.000đ" />
           </div>
