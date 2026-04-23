@@ -538,8 +538,8 @@ async def convert_to_rental(
             new_skus.append(new_sku)
             await session.execute(
                 text(
-                    """INSERT INTO item (id, volume_id, condition_level, status, health_percent, type) 
-                       VALUES (:id, :vid, 100, 'available', 100, 'rental')"""
+                    """INSERT INTO item (id, volume_id, condition_level, status, health_percent) 
+                       VALUES (:id, :vid, 100, 'available', 100)"""
                 ),
                 {"id": new_sku, "vid": payload.volume_id}
             )
@@ -1058,7 +1058,7 @@ async def list_titles_with_volumes(
         vol_id_placeholders = ",".join(str(i) for i in volume_ids)
         item_result = await session.execute(
             text(f"""
-                SELECT id, volume_id, status, type, condition_level, notes, version_no, reserved_at, reservation_expire_at
+                SELECT id, volume_id, status, condition_level, notes, version_no, reserved_at, reservation_expire_at
                 FROM item
                 WHERE volume_id IN ({vol_id_placeholders}) AND deleted_at IS NULL
 
@@ -1075,7 +1075,7 @@ async def list_titles_with_volumes(
             row = TitleItemRow(
                 id=item_id,
                 status=str(ir["status"]),
-                type=str(ir.get("type", "retail")),
+                type="rental",
                 condition_level=int(ir["condition_level"]),
                 notes=ir["notes"],
                 has_barcode=is_real_barcode,
@@ -1348,13 +1348,12 @@ async def create_item(
 
     await session.execute(
         text("""
-            INSERT INTO item (id, volume_id, status, type, condition_level, health_percent, version_no, notes)
-            VALUES (:id, :vid, 'available', :type, :cond, :cond, :ver, :notes)
+            INSERT INTO item (id, volume_id, status, condition_level, health_percent, version_no, notes)
+            VALUES (:id, :vid, 'available', :cond, :cond, :ver, :notes)
         """),
         {
             "id": item_id,
             "vid": payload.volume_id,
-            "type": payload.type,
             "cond": payload.condition_level,
             "ver": payload.version_no,
             "notes": payload.notes

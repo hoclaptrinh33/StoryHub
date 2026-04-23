@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, inject, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, inject, onMounted, onBeforeUnmount, watch } from 'vue';
 import { 
   fetchTitlesWithVolumes, 
   createTitle as apiCreateTitle,
@@ -14,7 +14,11 @@ import {
   convertToRental,
   buildRequestId,
   resolveRealtimeWsUrl,
+  autofillTitleMetadata,
+  createVolume as apiCreateQuickVolume,
+  StoryHubApiError,
 } from '../services/storyhubApi';
+import { useScannerStore } from '../stores/scanner';
 import { useAuthStore } from '../stores/auth';
 
 const addNotification = inject('addNotification') as any;
@@ -51,6 +55,297 @@ const apiError = ref('');
 
 // books = danh sách đầu truyện từ API
 const books = ref<any[]>([]);
+
+const scannerStore = useScannerStore();
+
+// ─── Quick Intake state ──────────────────────────────────────────────────────
+const isQuickIntakeModalOpen = ref(false);
+const isMetadataLoading = ref(false);
+const metadataState = ref<'idle' | 'loading' | 'success' | 'error'>('idle');
+const metadataMessage = ref('Nhập ISBN để tự điền thông tin truyện.');
+const quickIntakeForm = ref({
+  title_name: '',
+  author: '',
+  description: '',
+  cover_url: '',
+  categories: [] as string[],
+  page_count: null as number | null,
+  published_date: '',
+  volume_number: 1,
+  isbn: '',
+  retail_stock: 1,
+  p_sell_new: 30000,
+});
+
+// Barcode printing selection
+const selectedItemIds = ref<string[]>([]);
+const toggleItemSelection = (id: string) => {
+  const idx = selectedItemIds.value.indexOf(id);
+  if (idx > -1) selectedItemIds.value.splice(idx, 1);
+  else selectedItemIds.value.push(id);
+};
+const isItemSelected = (id: string) => selectedItemIds.value.includes(id);
+const toggleAllInModal = () => {
+  if (!selectedVolume.value) return;
+  const allIds = selectedVolume.value.items.map((it: any) => it.id);
+  const allSelected = allIds.every((id: string) => selectedItemIds.value.includes(id));
+  if (allSelected) {
+    selectedItemIds.value = selectedItemIds.value.filter(id => !allIds.includes(id));
+  } else {
+    selectedItemIds.value = [...new Set([...selectedItemIds.value, ...allIds])];
+  }
+};
+
+const printSelectedBarcodes = () => {
+  if (selectedItemIds.value.length === 0) {
+    addNotification?.('warning', 'Vui lòng chọn ít nhất một bản sao để in.');
+    return;
+  }
+  
+  // Tạo hoặc lấy iframe ẩn để in (tốt cho Tauri/Electron và tránh pop-up blocker)
+  let iframe = document.getElementById('print-iframe') as HTMLIFrameElement;
+  if (!iframe) {
+    iframe = document.createElement('iframe');
+    iframe.id = 'print-iframe';
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+  }
+
+  const labelsHtml = selectedItemIds.value.map(id => `
+    <div class="barcode-label">
+      <div class="store-name">StoryHub - Kho truyện</div>
+      <img src="https://barcodeapi.org/api/128/${id}" alt="${id}">
+      <div class="barcode-text">${id}</div>
+    </div>
+  `).join('');
+
+  const doc = iframe.contentWindow?.document;
+  if (!doc) return;
+
+  doc.open();
+  doc.write(`
+    <html>
+      <head>
+        <title>In mã vạch</title>
+        <style>
+          @page { size: auto; margin: 0; }
+          body { font-family: sans-serif; display: flex; flex-wrap: wrap; padding: 10px; margin: 0; }
+          .barcode-label { 
+            width: 38mm; height: 25mm; 
+            border: 1px dashed #ccc; 
+            margin: 2mm; 
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            overflow: hidden; text-align: center; page-break-inside: avoid;
+          }
+          .store-name { font-size: 8px; font-weight: bold; margin-bottom: 2px; }
+          img { max-width: 90%; max-height: 12mm; }
+          .barcode-text { font-size: 9px; margin-top: 2px; font-weight: 600; letter-spacing: 1px; }
+        </style>
+      </head>
+      <body>
+        ${labelsHtml}
+        <script>
+          function doPrint() {
+            window.focus();
+            window.print();
+          }
+          
+          window.onload = () => {
+            let imgs = document.getElementsByTagName('img');
+            let loaded = 0;
+            if (imgs.length === 0) {
+              doPrint();
+            } else {
+              Array.from(imgs).forEach(img => {
+                if (img.complete) {
+                  loaded++;
+                  if (loaded === imgs.length) doPrint();
+                } else {
+                  img.onload = () => {
+                    loaded++;
+                    if (loaded === imgs.length) doPrint();
+                  };
+                  img.onerror = () => {
+                    loaded++;
+                    if (loaded === imgs.length) doPrint();
+                  };
+                }
+              });
+            }
+          };
+        <\/script>
+      </body>
+    </html>
+  `);
+  doc.close();
+};
+
+// ─── Quick Intake Logic ──────────────────────────────────────────────────────
+const normalizeIsbn = (value: string) => value.replace(/[^0-9Xx]/g, "").toUpperCase();
+
+const parseCategoriesInput = (value: string | string[]) => {
+  if (Array.isArray(value)) return value;
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+};
+
+const extractTitleAndVolume = (rawTitle: string) => {
+  const cleaned = rawTitle.trim();
+  const volumeMatch = cleaned.match(/(?:\b(?:t\.?|tap|tập|vol(?:ume)?\.?)[\s#:.-]*)(\d{1,4})/i);
+
+  if (!volumeMatch) {
+    return { title: cleaned, volume: 1 };
+  }
+
+  const volume = Number(volumeMatch[1]) || 1;
+  const title = cleaned.replace(volumeMatch[0], "").replace(/[-:()\s]+$/g, "").trim();
+  return {
+    title: title || cleaned,
+    volume,
+  };
+};
+
+const resetQuickIntakeForm = () => {
+  quickIntakeForm.value = {
+    title_name: '',
+    author: '',
+    description: '',
+    cover_url: '',
+    categories: [],
+    page_count: null,
+    published_date: '',
+    volume_number: 1,
+    isbn: '',
+    retail_stock: 1,
+    p_sell_new: 30000,
+  };
+  metadataState.value = 'idle';
+  metadataMessage.value = 'Nhập ISBN để tự điền thông tin truyện.';
+};
+
+const applyMetadata = (
+  metadata: {
+    name: string;
+    author: string;
+    genre: string;
+    description: string;
+    cover_url: string;
+    confidence: number;
+  },
+  source: "cache" | "external_api" | "fallback",
+) => {
+  const normalizedTitle = metadata.name.trim();
+  const parsed = extractTitleAndVolume(normalizedTitle);
+  const normalizedGenres = parseCategoriesInput(metadata.genre);
+
+  quickIntakeForm.value.title_name = parsed.title;
+  quickIntakeForm.value.volume_number = parsed.volume;
+  if (metadata.author.trim().length > 0) {
+    quickIntakeForm.value.author = metadata.author.trim();
+  }
+  quickIntakeForm.value.description = metadata.description;
+  quickIntakeForm.value.cover_url = metadata.cover_url;
+  quickIntakeForm.value.categories = normalizedGenres;
+
+  metadataState.value = "success";
+  const sourceLabel =
+    source === "cache"
+      ? "cache local"
+      : source === "external_api"
+        ? "nguồn ngoài"
+        : "fallback nội bộ";
+  metadataMessage.value = `Đã tự điền (${sourceLabel}): ${parsed.title} (Tập ${parsed.volume}).`;
+};
+
+const lookupMetadataByIsbn = async (rawIsbn: string) => {
+  const isbn = normalizeIsbn(rawIsbn);
+  if (isbn.length < 10) {
+    metadataState.value = "error";
+    metadataMessage.value = "ISBN quá ngắn để tra metadata.";
+    return;
+  }
+
+  isMetadataLoading.value = true;
+  metadataState.value = "loading";
+  metadataMessage.value = "Đang tra cứu thông tin qua backend...";
+
+  try {
+    const response = await autofillTitleMetadata({
+      isbn,
+      request_id: buildRequestId("quick-intake-autofill"),
+    }, token.value);  // ← truyền token
+
+    // Nếu có ảnh bìa từ metadata và là URL hợp lệ, import về local
+
+    applyMetadata(response.metadata, response.source);
+  } catch (error: unknown) {
+    const apiErr = error instanceof StoryHubApiError ? error : null;
+    metadataState.value = "error";
+    if (apiErr?.code === "EXTERNAL_API_TIMEOUT") {
+      metadataMessage.value = "Nguồn dữ liệu đang chậm. Vui lòng thử lại sau.";
+    } else if (apiErr?.code === "METADATA_NOT_FOUND") {
+      metadataMessage.value = "Không tìm thấy thông tin. Vui lòng nhập thủ công.";
+    } else {
+      metadataMessage.value = (error as any)?.message || "Không thể tra cứu thông tin lúc này.";
+    }
+    quickIntakeForm.value.cover_url = '';
+  } finally {
+    isMetadataLoading.value = false;
+  }
+};
+
+const openQuickIntakeModal = (scannedIsbn = "") => {
+  resetQuickIntakeForm();
+  isQuickIntakeModalOpen.value = true;
+  if (scannedIsbn) {
+    quickIntakeForm.value.isbn = scannedIsbn;
+    void lookupMetadataByIsbn(scannedIsbn);
+  }
+};
+
+const processQuickIntake = async () => {
+  if (!quickIntakeForm.value.title_name.trim()) {
+    addNotification('warning', 'Vui lòng nhập tên truyện.');
+    return;
+  }
+
+  isLoading.value = true;
+  try {
+    const normalizedDescription = quickIntakeForm.value.description.trim();
+    const normalizedCover = quickIntakeForm.value.cover_url.trim();
+
+    await apiCreateQuickVolume({
+      title_name: quickIntakeForm.value.title_name.trim(),
+      isbn: normalizeIsbn(quickIntakeForm.value.isbn),
+      author: quickIntakeForm.value.author.trim() || "Unknown",
+      description: normalizedDescription,
+      cover_url: normalizedCover || null,
+      categories: quickIntakeForm.value.categories,
+      page_count: quickIntakeForm.value.page_count || null,
+      published_date: quickIntakeForm.value.published_date.trim() || null,
+      volume_number: quickIntakeForm.value.volume_number,
+      retail_stock: quickIntakeForm.value.retail_stock,
+      p_sell_new: Number(quickIntakeForm.value.p_sell_new),
+      request_id: buildRequestId("quick-intake-create"),
+    }
+  );
+
+    addNotification('success', `Đã thêm ${quickIntakeForm.value.title_name} Tập ${quickIntakeForm.value.volume_number} vào kho.`);
+    isQuickIntakeModalOpen.value = false;
+    await loadTitles(); // Reload list
+  } catch (error: any) {
+    addNotification('error', error?.message || "Không thể thực hiện nhập nhanh.");
+  } finally {
+    isLoading.value = false;
+  }
+};
 
 async function loadTitles(q?: string) {
   isLoading.value = true;
@@ -163,6 +458,26 @@ const connectWebSocket = () => {
 onMounted(() => { 
   loadTitles(); 
   connectWebSocket(); 
+  watch(
+    () => scannerStore.lastScannedCode,
+    async (newCode) => {
+      if (!newCode || newCode === lastScannedCodeHandled) return;
+      lastScannedCodeHandled = newCode;
+
+      // (Tuỳ chọn) Kiểm tra xem ISBN đã tồn tại trong kho chưa
+      // Nếu có thể gọi API kiểm tra nhanh, bạn có thể làm thêm, nếu không thì cứ mở modal new
+      openQuickIntakeModal(newCode);
+      
+      // Reset để sẵn sàng cho lần quét tiếp theo (sau 1 giây)
+      setTimeout(() => {
+        if (scannerStore.lastScannedCode === newCode) {
+          // Không reset store ở đây vì có thể component khác cần dùng
+          lastScannedCodeHandled = '';
+        }
+      }, 1000);
+    },
+    { immediate: true }
+  );
 });
 
 onBeforeUnmount(() => ws?.close());
@@ -174,6 +489,7 @@ const openVolumeModal = (book: any) => {
 };
 const openItemsModal = (vol: any) => {
   selectedVolume.value = vol; 
+  selectedItemIds.value = []; // Clear selection when switching volume
   isItemsModalOpen.value = true;
 };
 
@@ -313,7 +629,8 @@ const openEditItem = (item: any) => {
 };
 const saveItem = async () => {
   try {
-    const conditionVal = formItem.value.condition === 'Tốt' ? 100 : formItem.value.condition === 'Trung bình' ? 50 : 20;
+    const cond = formItem.value.condition;
+    const conditionVal = (cond === 'Mới' || cond === 'Tốt') ? 100 : (cond === 'Trung bình') ? 50 : 20;
     const statusToSend = reverseStatusMap[formItem.value.status] || formItem.value.status;
 
    if (formItem.value.id && !isAddItemModalOpen.value) {
@@ -437,6 +754,10 @@ const formatVND = (val: number) => {
                 </select>
             </div>
             <input v-model="searchQuery" type="text" placeholder="Tìm kiếm truyện..." class="search-input" />
+            <button class="btn-add" style="background-color: #059669; margin-left: 0;" @click="openQuickIntakeModal()">
+               <span class="material-icons" style="font-size: 1.2rem; vertical-align: middle; margin-right: 4px;">qr_code_scanner</span>
+               Nhập nhanh (ISBN)
+            </button>
             <button class="btn-add" @click="openAddBook">+ Đầu truyện</button>
         </div>
       </div>
@@ -520,6 +841,7 @@ const formatVND = (val: number) => {
         <table class="volume-table">
           <thead>
             <tr>
+              <th style="width: 40px;"><input type="checkbox" @change="toggleAllInModal" /></th>
               <th>Mã Vạch</th>
               <th>Tập truyện</th>
               <th>Trạng thái</th>
@@ -533,6 +855,14 @@ const formatVND = (val: number) => {
           </thead>
          <tbody>
   <tr v-for="items in selectedVolume?.items" :key="items.id" class="clickable-row">
+    <td>
+      <input 
+        type="checkbox" 
+        :checked="isItemSelected(items.id)" 
+        @change="toggleItemSelection(items.id)" 
+        @click.stop
+      />
+    </td>
     <td>{{ items.id }}</td>
     <td>{{ items.volume }}</td>
     <td>{{ getStatusText(items.status) }}</td>   <!-- Sửa dòng này -->
@@ -550,19 +880,27 @@ const formatVND = (val: number) => {
         </table>
 
         <template #footer>
-  <button class="btn-secondary" @click="isItemsModalOpen = false">Đóng</button>
-  <button class="btn-primary" @click="isConvertRentalModalOpen = true">Chuyển sang truyện thuê</button>    
+          <button class="btn-secondary" @click="isItemsModalOpen = false">Đóng</button>
 
-  <!-- Sử dụng retail_stock thay vì so_luong -->
-  <button 
-    class="btn-primary" 
-    @click="openConvertRental" 
-    v-if="selectedVolume?.retail_stock > 0"
-  >
-    Chuyển truyện thuê (Tồn bán: {{ selectedVolume?.retail_stock }})
-  </button>
-  <button class="btn-primary" @click="openAddItem">+ Thêm bản sao mới</button>
-</template>
+          <button 
+            class="btn-primary" 
+            style="background-color: #059669;"
+            @click="printSelectedBarcodes"
+            v-if="selectedItemIds.length > 0"
+          >
+            🖨️ In mã vạch ({{ selectedItemIds.length }} đã chọn)
+          </button>
+
+          <!-- Sử dụng retail_stock thay vì so_luong -->
+          <button 
+            class="btn-primary" 
+            @click="openConvertRental" 
+            v-if="selectedVolume?.retail_stock > 0"
+          >
+            Chuyển truyện thuê (Tồn bán: {{ selectedVolume?.retail_stock }})
+          </button>
+          <button class="btn-primary" @click="openAddItem">+ Thêm bản sao mới</button>
+        </template>
       </BaseModal>
 
       <!-- Edit/Add Book Modal -->
@@ -654,7 +992,12 @@ const formatVND = (val: number) => {
           </div>
           <div class="form-group">
             <label>Tình trạng</label>
-            <input v-model="formItem.condition" type="text" placeholder="Mới, Cũ..." />
+            <select v-model="formItem.condition">
+              <option>Mới</option>
+              <option>Tốt</option>
+              <option>Trung bình</option>
+              <option>Kém</option>
+            </select>
           </div>
           <div class="form-group full-width">
             <label>Ghi chú</label>
@@ -690,7 +1033,97 @@ const formatVND = (val: number) => {
           <button class="btn-primary" @click="saveConvertRental">Xác nhận chuyển</button>
         </template>
       </BaseModal>
-      </div>
+      <!-- Quick Intake Modal -->
+      <BaseModal
+        :is-open="isQuickIntakeModalOpen"
+        title="Nhập Nhanh Đầu Sách (ISBN)"
+        @close="isQuickIntakeModalOpen = false"
+      >
+        <div class="form-grid">
+          <div class="form-group full-width">
+            <label>Mã ISBN (*)</label>
+            <div style="display: flex; gap: 8px;">
+              <input
+                v-model="quickIntakeForm.isbn"
+                type="text"
+                placeholder="Quét hoặc nhập ISBN"
+                @keyup.enter="lookupMetadataByIsbn(quickIntakeForm.isbn)"
+                style="flex: 1;"
+              />
+              <button
+                type="button"
+                class="btn-primary"
+                style="background-color: #64748b; padding: 0 16px;"
+                :disabled="isMetadataLoading"
+                @click="lookupMetadataByIsbn(quickIntakeForm.isbn)"
+              >
+                {{ isMetadataLoading ? "Đang tìm..." : "Tra cứu" }}
+              </button>
+            </div>
+            <p :class="['metadata-status', metadataState]">{{ metadataMessage }}</p>
+          </div>
+
+          <div v-if="quickIntakeForm.cover_url" class="cover-preview-wrap">
+            <img :src="quickIntakeForm.cover_url" alt="Bìa sách" class="cover-preview-img" />
+          </div>
+
+          <div class="form-group" :class="{ 'full-width': !quickIntakeForm.cover_url }">
+            <label>Tên truyện (*)</label>
+            <input v-model="quickIntakeForm.title_name" type="text" placeholder="VD: Conan" />
+          </div>
+
+          <div class="form-group">
+            <label>Tác giả</label>
+            <input v-model="quickIntakeForm.author" type="text" placeholder="VD: Gosho Aoyama" />
+          </div>
+
+          <div class="form-group full-width">
+            <label>Mô tả</label>
+            <textarea
+              v-model="quickIntakeForm.description"
+              rows="3"
+              placeholder="Thông tin giới thiệu sách..."
+            ></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>Tập số (*)</label>
+            <input v-model.number="quickIntakeForm.volume_number" type="number" min="1" />
+          </div>
+
+          <div class="form-group">
+            <label>Số lượng nhập (*)</label>
+            <input v-model.number="quickIntakeForm.retail_stock" type="number" min="1" />
+          </div>
+
+          <div class="form-group">
+            <label>Giá bán mới (VND)</label>
+            <input
+              v-model.number="quickIntakeForm.p_sell_new"
+              type="number"
+              min="0"
+              step="1000"
+            />
+          </div>
+          
+          <div class="form-group">
+             <label>Thể loại</label>
+             <input :value="quickIntakeForm.categories.join(', ')" type="text" disabled placeholder="Tự động nạp..." />
+          </div>
+        </div>
+
+        <template #footer>
+          <button class="btn-secondary" @click="isQuickIntakeModalOpen = false">Hủy</button>
+          <button
+            class="btn-primary"
+            :disabled="isLoading || !quickIntakeForm.title_name"
+            @click="processQuickIntake"
+          >
+            {{ isLoading ? "ĐANG LƯU..." : "LƯU VÀO KHO" }}
+          </button>
+        </template>
+      </BaseModal>
+    </div>
   </DefaultLayout>
 </template>
 
@@ -738,4 +1171,28 @@ td { padding: 16px; border-bottom: 1px solid #f3f4f6; color: #4b5563; align-item
   padding: 8px 12px; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 0.9rem; outline: none; transition: 0.2s;
 }
 .form-group input:focus, .form-group textarea:focus, .form-group select:focus { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1); }
+
+/* Metadata Styles */
+.metadata-status { font-size: 0.75rem; margin-top: 4px; font-weight: 600; }
+.metadata-status.loading { color: #2563eb; }
+.metadata-status.success { color: #059669; }
+.metadata-status.error { color: #dc2626; }
+.metadata-status.idle { color: #64748b; }
+
+.cover-preview-wrap {
+  grid-row: span 2;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  padding: 8px;
+}
+.cover-preview-img {
+  max-width: 100%;
+  max-height: 180px;
+  border-radius: 4px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
 </style>
