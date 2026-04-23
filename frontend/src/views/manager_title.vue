@@ -45,25 +45,8 @@ const filteredBooks = computed(() => {
     return matchesSearch && matchesAuthor && matchesPublisher && matchesGenre;
   });
 });
-// Dữ liệu giả lập
-const books = ref([
-  { 
-    id: 1, code: 'TR001', name: 'One Piece - Tập 105', description: 'Hành trình hải tặc...', author: 'Oda Eiichiro', genre: 'Shonen', publisher: 'Kim Đồng', image: 'https://via.placeholder.com/50x70',
-    volumes: [{ id: 1, code: 'VOL-01', name: 'One Piece', volume: '105', isbn: '978-604-123',so_luong:10,
-        items: [{ id: 'BC-001', name: 'One Piece', volume: '105', status: 'Có sẵn', 
-            condition: 'Mới', price: '20.000đ', rent_price: '5.000đ', 
-            start_date: '2026-04-01', end_date: '2026-05-01', note: 'Không', version: 'Tái bản' }]
-     }]
-  },
-  { 
-    id: 2, code: 'TR002', name: 'Thám Tử Lừng Danh Conan', description: 'Thám tử bị teo nhỏ...', author: 'Aoyama Gosho', genre: 'Trinh thám', publisher: 'Kim Đồng', image: 'https://via.placeholder.com/50x70',
-    volumes: [{ id: 2, code: 'VOL-02', name: 'Conan', volume: '98', isbn: '978-604-456',so_luong:10 
-        ,items: [{ id: 'BC-001', name: 'One Piece', volume: '105', status: 'Có sẵn', 
-            condition: 'Mới', price: '20.000đ', rent_price: '5.000đ', 
-            start_date: '2026-04-01', end_date: '2026-05-01', note: 'Không', version: 'Tái bản' }]
-    }]
-  },
-]);
+
+
 const openVolumeModal = (book: any) => {
   selectedBook.value = book;
   isModalOpen.value = true;
