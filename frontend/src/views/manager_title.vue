@@ -551,6 +551,8 @@ const formatVND = (val: number) => {
 
         <template #footer>
   <button class="btn-secondary" @click="isItemsModalOpen = false">Đóng</button>
+  <button class="btn-primary" @click="isConvertRentalModalOpen = true">Chuyển sang truyện thuê</button>    
+
   <!-- Sử dụng retail_stock thay vì so_luong -->
   <button 
     class="btn-primary" 
