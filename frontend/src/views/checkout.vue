@@ -726,6 +726,10 @@ const canSubmitCheckout = computed(() => {
   }
   return true;
 });
+const hasOutOfStock = computed(() =>
+  cart.value.some(item => item.type === 'retail' && (item.stock_quantity ?? 0) <= 0)
+);
+// sau đó trong canSubmitCheckout thêm điều kiện:
 
 const hasRealtimeConflict = computed(() => realtimeConflictCodes.value.length > 0);
 const currentInvoiceTarget = computed(
@@ -983,6 +987,12 @@ const getModeMismatchMessage = (productType: InventoryItemListItem["type"]) => {
 };
 
 const addToCart = (product: InventoryItemListItem, source: "scanner" | "manual") => {
+  if (product.type === 'retail' && (product.stock_quantity ?? 0) <= 0) {
+  playScanAudio('error');
+  addNotification('error', `Sách "${product.name}" đã hết hàng.`);
+  return;
+}
+  
   if (!isProductAllowedInCurrentMode(product)) {
     playScanAudio("error");
     addNotification("warning", getModeMismatchMessage(product.type));

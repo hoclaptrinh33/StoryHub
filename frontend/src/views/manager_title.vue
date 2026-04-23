@@ -458,26 +458,7 @@ const connectWebSocket = () => {
 onMounted(() => { 
   loadTitles(); 
   connectWebSocket(); 
-  watch(
-    () => scannerStore.lastScannedCode,
-    async (newCode) => {
-      if (!newCode || newCode === lastScannedCodeHandled) return;
-      lastScannedCodeHandled = newCode;
-
-      // (Tuỳ chọn) Kiểm tra xem ISBN đã tồn tại trong kho chưa
-      // Nếu có thể gọi API kiểm tra nhanh, bạn có thể làm thêm, nếu không thì cứ mở modal new
-      openQuickIntakeModal(newCode);
-      
-      // Reset để sẵn sàng cho lần quét tiếp theo (sau 1 giây)
-      setTimeout(() => {
-        if (scannerStore.lastScannedCode === newCode) {
-          // Không reset store ở đây vì có thể component khác cần dùng
-          lastScannedCodeHandled = '';
-        }
-      }, 1000);
-    },
-    { immediate: true }
-  );
+  
 });
 
 onBeforeUnmount(() => ws?.close());

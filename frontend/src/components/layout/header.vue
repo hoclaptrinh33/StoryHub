@@ -25,8 +25,8 @@
       <router-link v-if="isManagerOrOwner" to="/khuyen-mai">KHUYẾN MÃI</router-link>
       <router-link v-if="isManagerOrOwner" to="/kho">KHO</router-link>
       <router-link v-if="isManagerOrOwner" to="/bao-cao">BÁO CÁO</router-link>
-      <!-- Chỉ owner -->
-      <router-link v-if="isOwner" to="/quan-ly">QUẢN LÝ</router-link>
+      <router-link v-if="isManagerOrOwner" to="/khach-hang">KHÁCH HÀNG</router-link>
+      <router-link v-if="isManagerOrOwner" to="/quan-ly">QUẢN LÝ</router-link>
     </nav>
   </header>
 </template>
