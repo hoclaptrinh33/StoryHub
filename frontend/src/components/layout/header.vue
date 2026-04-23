@@ -17,23 +17,36 @@
     </div>
     <nav class="nav-links">
       <input type="text" placeholder="Tìm kiếm truyện, khách hàng..." class="search-bar" />
+      <!-- Tất cả role đều thấy -->
       <router-link to="/">TRANG CHỦ</router-link>
-      <router-link to="/quan-ly">QUẢN LÝ</router-link>
       <router-link to="/ban-hang">BÁN HÀNG & CHO THUÊ</router-link>
       <router-link to="/hoan-tra">KIỂM ĐỊNH TRẢ</router-link>
-      <router-link to="/khuyen-mai">KHUYẾN MÃI</router-link>
-      <router-link to="/kho">KHO</router-link>
-      <router-link to="/bao-cao">BÁO CÁO</router-link>
+      <!-- Chỉ manager và owner -->
+      <router-link v-if="isManagerOrOwner" to="/khuyen-mai">KHUYẾN MÃI</router-link>
+      <router-link v-if="isManagerOrOwner" to="/kho">KHO</router-link>
+      <router-link v-if="isManagerOrOwner" to="/bao-cao">BÁO CÁO</router-link>
+      <router-link v-if="isManagerOrOwner" to="/khach-hang">KHÁCH HÀNG</router-link>
+      <!-- Chỉ owner -->
+      <router-link v-if="isOwner" to="/quan-ly">QUẢN LÝ</router-link>
     </nav>
   </header>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
 
 const router = useRouter()
 const authStore = useAuthStore()
+
+// Kiểm tra role để ẩn/hiện menu
+const isManagerOrOwner = computed(() =>
+  authStore.user?.role === 'manager' || authStore.user?.role === 'owner'
+)
+const isOwner = computed(() =>
+  authStore.user?.role === 'owner'
+)
 
 function getRoleText(role: string) {
   const map: Record<string, string> = {

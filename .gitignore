@@ -50,3 +50,7 @@ frontend/src-tauri/gen/
 
 # Bỏ qua file database local
 *.db
+
+# Agent Logs and Metadata
+brain/
+.gemini/

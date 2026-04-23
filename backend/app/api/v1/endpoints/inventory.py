@@ -29,7 +29,7 @@ from app.services import (
     write_audit_log,
 )
 
-router = APIRouter(prefix="/inventory", tags=["inventory"])
+router = APIRouter(prefix="/kho", tags=["kho"])
 
 
 class ReserveInventoryItemRequest(BaseModel):
@@ -497,7 +497,7 @@ async def convert_to_rental(
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
 ) -> ResponseEnvelope[ConvertToRentalPayload] | dict[str, object]:
-    auth.require_role("manager")
+    auth.require_role("manager","owner")
     auth.require_scope("inventory:write")
 
     cached = await get_cached_response(session, scope="inventory.convert", request_id=payload.request_id)
@@ -937,3 +937,447 @@ async def update_volume_price(
 
     return envelope
 
+
+# ---------------------------------------------------------------------------
+# GET /kho/titles  — Danh sách đầu truyện grouped (title → volumes → items)
+# ---------------------------------------------------------------------------
+
+class TitleItemRow(BaseModel):
+    id: str
+    status: str
+    condition_level: int
+    notes: str | None
+    has_barcode: bool  # True = có mã vạch thật → được phép thuê
+    version_no: int
+    reserved_at: str | None
+    reservation_expire_at: str | None
+
+class TitleVolumeRow(BaseModel):
+    id: int
+    volume_number: int
+    isbn: str | None
+    p_sell_new: int
+    price_rental: int   # = p_sell_new * 5%  (tính tự động)
+    price_deposit: int  # = p_sell_new * 30% (tính tự động)
+    retail_stock: int
+    rental_item_count: int  # số bản sao thuê available
+    items: list[TitleItemRow]
+
+class TitleRow(BaseModel):
+    id: int
+    name: str
+    author: str | None
+    genre: str | None
+    publisher: str | None
+    description: str | None
+    cover_url: str | None
+    volumes: list[TitleVolumeRow]
+
+
+@router.get("/titles", response_model=ResponseEnvelope[list[TitleRow]])
+async def list_titles_with_volumes(
+    q: str | None = None,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[list[TitleRow]]:
+    """Trả về toàn bộ đầu truyện kèm volumes và rental items cho trang quản lý kho."""
+    auth.require_scope("inventory:read")
+
+    # 1. Lấy danh sách titles
+    title_filter = ""
+    params: dict[str, object] = {}
+    if q:
+        title_filter = "WHERE t.deleted_at IS NULL AND t.name LIKE :q"
+        params["q"] = f"%{q}%"
+    else:
+        title_filter = "WHERE t.deleted_at IS NULL"
+
+    title_result = await session.execute(
+        text(f"""
+            SELECT t.id, t.name, t.author, t.genre, t.publisher, t.description, t.cover_url
+            FROM title t
+            {title_filter}
+            ORDER BY t.name ASC
+        """),
+        params,
+    )
+    title_rows = title_result.mappings().all()
+    if not title_rows:
+        return success_response([])
+
+    title_ids = [int(r["id"]) for r in title_rows]
+    id_placeholders = ",".join(str(i) for i in title_ids)
+
+    # 2. Lấy volumes của các titles đó
+    vol_result = await session.execute(
+        text(f"""
+            SELECT id, title_id, volume_number, isbn, p_sell_new, retail_stock
+            FROM volume
+            WHERE title_id IN ({id_placeholders}) AND deleted_at IS NULL
+            ORDER BY title_id ASC, volume_number ASC
+        """)
+    )
+    vol_rows = vol_result.mappings().all()
+
+    volume_ids = [int(r["id"]) for r in vol_rows]
+
+    # 3. Lấy items thuê của các volumes đó
+    items_by_volume: dict[int, list[TitleItemRow]] = {}
+    rental_count_by_volume: dict[int, int] = {}
+
+    if volume_ids:
+        vol_id_placeholders = ",".join(str(i) for i in volume_ids)
+        item_result = await session.execute(
+            text(f"""
+                SELECT id, volume_id, status, condition_level, notes, version_no, reserved_at, reservation_expire_at
+                FROM item
+                WHERE volume_id IN ({vol_id_placeholders}) AND deleted_at IS NULL
+                ORDER BY volume_id ASC, id ASC
+            """)
+        )
+        item_rows = item_result.mappings().all()
+        for ir in item_rows:
+            vid = int(ir["volume_id"])
+            # Có barcode thật = id không bắt đầu bằng "RNT-" (RNT- là auto-gen khi convert)
+            # Theo quy tắc: item phải có mã vạch (barcode thật) mới cho thuê
+            item_id = str(ir["id"])
+            is_real_barcode = not item_id.upper().startswith("RNT-")
+            row = TitleItemRow(
+                id=item_id,
+                status=str(ir["status"]),
+                condition_level=int(ir["condition_level"]),
+                notes=ir["notes"],
+                has_barcode=is_real_barcode,
+                version_no=int(ir["version_no"] or 1),
+                reserved_at=str(ir["reserved_at"]) if ir["reserved_at"] else None,
+                reservation_expire_at=str(ir["reservation_expire_at"]) if ir["reservation_expire_at"] else None,
+            )
+            items_by_volume.setdefault(vid, []).append(row)
+            if str(ir["status"]) == "available":
+                rental_count_by_volume[vid] = rental_count_by_volume.get(vid, 0) + 1
+
+    # 4. Ghép kết quả
+    K_RENT = 0.05
+    K_DEPOSIT = 0.30
+
+    volumes_by_title: dict[int, list[TitleVolumeRow]] = {}
+    for vr in vol_rows:
+        tid = int(vr["title_id"])
+        vid = int(vr["id"])
+        p_sell = int(vr["p_sell_new"] or 0)
+        auto_rental = max(int(round(p_sell * K_RENT)), 500)
+        volumes_by_title.setdefault(tid, []).append(
+            TitleVolumeRow(
+                id=vid,
+                volume_number=int(vr["volume_number"]),
+                isbn=vr["isbn"],
+                p_sell_new=p_sell,
+                price_rental=auto_rental,
+                price_deposit=max(int(round(p_sell * K_DEPOSIT)), 1000),
+                retail_stock=int(vr["retail_stock"] or 0),
+                rental_item_count=rental_count_by_volume.get(vid, 0),
+                items=items_by_volume.get(vid, []),
+            )
+        )
+
+    result_list = [
+        TitleRow(
+            id=int(tr["id"]),
+            name=str(tr["name"]),
+            author=tr["author"],
+            genre=tr["genre"],
+            publisher=tr["publisher"],
+            description=tr["description"],
+            cover_url=tr["cover_url"],
+            volumes=volumes_by_title.get(int(tr["id"]), []),
+        )
+        for tr in title_rows
+    ]
+
+    return success_response(result_list)
+# ---------------------------------------------------------------------------
+# CRUD Đầu truyện (Title)
+# ---------------------------------------------------------------------------
+
+class TitleMutateRequest(BaseModel):
+    name: str = Field(min_length=1)
+    author: str | None = None
+    description: str | None = None
+    genre: str | None = None
+    publisher: str | None = None
+
+@router.post("/titles")
+async def create_new_title(
+    payload: TitleMutateRequest,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+):
+    result = await session.execute(
+        text("""
+            INSERT INTO title (name, author, description, genre, publisher)
+            VALUES (:name, :author, :desc, :genre, :pub)
+            RETURNING id
+        """),
+        {"name": payload.name, "author": payload.author, "desc": payload.description, "genre": payload.genre, "pub": payload.publisher}
+    )
+    new_id = result.scalar()
+    await session.commit()
+    await write_audit_log(
+        session=session,
+        actor_user_id=auth.user_id,
+        action="CREATE_TITLE",
+        entity_type="title",
+        entity_id=str(new_id),
+        before=None,
+        after={"name": payload.name},
+        ip_address=None,
+        device_id=None,
+    )
+    return success_response({"id": new_id})
+
+@router.put("/titles/{title_id}")
+async def update_title(
+    title_id: int,
+    payload: TitleMutateRequest,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+):
+    await session.execute(
+        text("""
+            UPDATE title
+            SET name = :name, author = :author, description = :desc, genre = :genre, publisher = :pub, updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id AND deleted_at IS NULL
+        """),
+        {"id": title_id, "name": payload.name, "author": payload.author, "desc": payload.description, "genre": payload.genre, "pub": payload.publisher}
+    )
+    await session.commit()
+    await write_audit_log(
+        session=session,
+        actor_user_id=auth.user_id,
+        action="UPDATE_TITLE",
+        entity_type="title",
+        entity_id=str(title_id),
+        before=None,
+        after=None,
+        ip_address=None,
+        device_id=None,
+    )
+    return success_response({"id": title_id})
+
+@router.delete("/titles/{title_id}")
+async def delete_title(
+    title_id: int,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+):
+    await session.execute(
+        text("UPDATE title SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
+        {"id": title_id}
+    )
+    await session.execute(
+        text("UPDATE volume SET deleted_at = CURRENT_TIMESTAMP WHERE title_id = :id"),
+        {"id": title_id}
+    )
+    await session.execute(
+        text("UPDATE item SET deleted_at = CURRENT_TIMESTAMP WHERE volume_id IN (SELECT id FROM volume WHERE title_id = :id)"),
+        {"id": title_id}
+    )
+    await session.commit()
+    await write_audit_log(
+        session=session,
+        actor_user_id=auth.user_id,
+        action="DELETE_TITLE",
+        entity_type="title",
+        entity_id=str(title_id),
+        before=None,
+        after=None,
+        ip_address=None,
+        device_id=None,
+    )
+    return success_response({"deleted": True})
+
+
+# ---------------------------------------------------------------------------
+# CRUD Tập truyện (Volume)
+# ---------------------------------------------------------------------------
+
+class VolumeMutateRequest(BaseModel):
+    volume_number: int = Field(gt=0)
+    isbn: str | None = None
+    p_sell_new: int = Field(ge=0)
+    retail_stock: int = Field(ge=0)
+
+@router.put("/volumes/{volume_id}")
+async def update_volume(
+    volume_id: int,
+    payload: VolumeMutateRequest,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+):
+    await session.execute(
+        text("""
+            UPDATE volume
+            SET volume_number = :vol_num, isbn = :isbn, p_sell_new = :p_sell, retail_stock = :stock, updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id AND deleted_at IS NULL
+        """),
+        {
+            "id": volume_id, 
+            "vol_num": payload.volume_number, 
+            "isbn": payload.isbn, 
+            "p_sell": payload.p_sell_new, 
+            "stock": payload.retail_stock
+        }
+    )
+    await session.commit()
+    await write_audit_log(
+        session=session,
+        actor_user_id=auth.user_id,
+        action="UPDATE_VOLUME",
+        entity_type="volume",
+        entity_id=str(volume_id),
+        before=None,
+        after=None,
+        ip_address=None,
+        device_id=None,
+    )
+    return success_response({"id": volume_id})
+
+@router.delete("/volumes/{volume_id}")
+async def delete_volume(
+    volume_id: int,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+):
+    await session.execute(
+        text("UPDATE volume SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
+        {"id": volume_id}
+    )
+    await session.execute(
+        text("UPDATE item SET deleted_at = CURRENT_TIMESTAMP WHERE volume_id = :id"),
+        {"id": volume_id}
+    )
+    await session.commit()
+    await write_audit_log(
+        session=session,
+        actor_user_id=auth.user_id,
+        action="DELETE_VOLUME",
+        entity_type="volume",
+        entity_id=str(volume_id),
+        before=None,
+        after=None,
+        ip_address=None,
+        device_id=None,
+    )
+    return success_response({"deleted": True})
+
+
+# ---------------------------------------------------------------------------
+# CRUD Bản sao (Item)
+# ---------------------------------------------------------------------------
+
+class ItemCreateRequest(BaseModel):
+    volume_id: int
+    id: str | None = None # barcode. If none, auto-generate RNT-{uuid}
+    condition_level: int = Field(ge=0, le=100, default=100)
+    notes: str | None = None
+    version_no: int = Field(default=1)
+
+class ItemUpdateRequest(BaseModel):
+    status: str
+    condition_level: int = Field(ge=0, le=100)
+    notes: str | None = None
+
+@router.post("/items")
+async def create_item(
+    request: Request,
+    payload: ItemCreateRequest,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session), # noqa: B008
+):
+    item_id = str(payload.id).strip() if (payload.id is not None and str(payload.id).strip()) else f"RNT-{str(uuid.uuid4()).replace('-', '')[:8].upper()}"
+    
+    # Kiem tra id xem co trung khong
+    exist = await session.execute(text("SELECT id FROM item WHERE id = :id"), {"id": item_id})
+    if exist.scalar():
+        raise AppError(status_code=400, message="Mã bản sao đã tồn tại")
+
+    await session.execute(
+        text("""
+            INSERT INTO item (id, volume_id, status, condition_level, health_percent, version_no, notes)
+            VALUES (:id, :vid, 'available', :cond, :cond, :ver, :notes)
+        """),
+        {
+            "id": item_id,
+            "vid": payload.volume_id,
+            "cond": payload.condition_level,
+            "ver": payload.version_no,
+            "notes": payload.notes
+        }
+    )
+    await session.commit()
+    await write_audit_log(
+        session=session,
+        actor_user_id=auth.user_id,
+        action="CREATE_ITEM",
+        entity_type="item",
+        entity_id=item_id,
+        before=None,
+        after=None,
+        ip_address=None,
+        device_id=None,
+    )
+    return success_response({"id": item_id})
+
+@router.put("/items/{item_id}")
+async def update_item(
+    item_id: str,
+    payload: ItemUpdateRequest,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+):
+    await session.execute(
+        text("""
+            UPDATE item
+            SET status = :status, condition_level = :cond, notes = :notes, updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id AND deleted_at IS NULL
+        """),
+        {"id": item_id, "status": payload.status, "cond": payload.condition_level, "notes": payload.notes}
+    )
+    await session.commit()
+    await write_audit_log(
+        session=session,
+        actor_user_id=auth.user_id,
+        action="UPDATE_ITEM",
+        entity_type="item",
+        entity_id=item_id,
+        before=None,
+        after=None,
+        ip_address=None,
+        device_id=None,
+    )
+    return success_response({"id": item_id})
+
+@router.delete("/items/{item_id}")
+async def delete_item(
+    item_id: str,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+):
+    await session.execute(
+        text("UPDATE item SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
+        {"id": item_id}
+    )
+    await session.commit()
+    await session.commit()
+    await write_audit_log(
+        session=session,
+        actor_user_id=auth.user_id,
+        action="DELETE_ITEM",
+        entity_type="item",
+        entity_id=item_id,
+        before=None,
+        after=None,
+        ip_address=None,
+        device_id=None,
+    )
+    return success_response({"deleted": True})

@@ -1118,6 +1118,8 @@ async def return_rental_items(
         )
         contract_items = {str(row["item_id"]): dict(row) for row in rental_item_result.mappings()}
 
+        # rental_fee chỉ dùng để ghi log thống kê, KHÔNG tính vào total_fee
+        # vì khách đã trả tiền thuê lúc checkout rồi
         rental_fee = 0
         late_fee = 0
         damage_fee = 0
@@ -1141,6 +1143,7 @@ async def return_rental_items(
 
             rent_price = int(item_row["final_rent_price"])
             deposit = int(item_row["final_deposit"])
+            # Ghi nhận rental_fee vào log nhưng KHÔNG cộng vào phí tổng
             rental_fee += rent_price
             if delay_days > 0:
                 late_fee += delay_days * int(settings.overdue_fee_per_day)
@@ -1196,7 +1199,9 @@ async def return_rental_items(
             )
             status_change_events.append((line.item_id, str(item_row["status"]), item_target_status))
 
-        total_fee = rental_fee + late_fee + damage_fee + lost_fee
+        # Chỉ tính phí trễ hạn và phí hư hỏng/mất vào tổng phí phải trừ vào cọc
+        # rental_fee đã được thu tại thời điểm checkout, không thu lại
+        total_fee = late_fee + damage_fee + lost_fee
         remaining_deposit_before = int(contract_row["remaining_deposit"])
         deducted_from_deposit = min(total_fee, remaining_deposit_before)
         remaining_debt = max(total_fee - remaining_deposit_before, 0)

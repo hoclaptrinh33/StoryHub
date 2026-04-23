@@ -14,7 +14,6 @@ _ROLE_SCOPES: dict[str, tuple[str, ...]] = {
     "cashier": (
         "inventory:read",
         "inventory:reserve",
-        "inventory:write",
         "crm:read",
         "crm:write",
         "metadata:read",
