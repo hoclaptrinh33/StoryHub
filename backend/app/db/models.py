@@ -61,6 +61,7 @@ class Item(Base):
     condition_level = Column(Integer, default=100)
     status = Column(String(50), default="available") 
     health_percent = Column(Integer, default=100)
+    item_type = Column(String(20), default="rental") # retail|rental
     notes = Column(Text, nullable=True)
     
     reserved_by_customer_id = Column(Integer, nullable=True)

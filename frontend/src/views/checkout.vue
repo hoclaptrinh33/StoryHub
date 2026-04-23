@@ -637,15 +637,11 @@ const normalizeLookup = (value: string) => value.replace(/[^A-Za-z0-9]/g, "").to
 const normalizePhone = (value: string) => value.replace(/\D/g, "");
 
 const visibleProducts = computed(() => {
-  if (isRetailMode.value) {
-    return availableProducts.value.filter((product) => product.type === "retail");
-  }
-
-  if (isRentalMode.value) {
-    return availableProducts.value.filter((product) => product.type === "rental");
-  }
-
-  return availableProducts.value;
+  let products = availableProducts.value;
+    if (isRetailMode.value) products = products.filter(p => p.type === 'retail');
+    if (isRentalMode.value) products = products.filter(p => p.type === 'rental');
+    // Thêm lọc trạng thái (phòng ngừa dữ liệu cũ)
+    return products.filter(p => p.status === 'available');
 });
 
 const customerObj = computed(() => {

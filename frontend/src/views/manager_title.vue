@@ -44,9 +44,9 @@ const selectedBook = ref<any>(null);
 const selectedVolume = ref<any>(null);
 
 // ─── Form state ───────────────────────────────────────────────────────────────
-const formBook = ref({ id: 0, code: '', name: '', description: '', author: '', genre: '', publisher: '', image: '', volumes: [] as any[] });
+const formBook = ref({ id: 0, code: '', name: '', description: '', author: '', genre: '', publisher: '',cover_url: '', image: '', volumes: [] as any[] });
 const formVolume = ref({ id: 0, volume: 0, isbn: '', so_luong: 0, price: 0 as string | number, rent_price: 0 as string | number });
-const formItem = ref({ id: '', status: 'Có sẵn', condition: 'Mới', note: '' });
+const formItem = ref({ id: '', status: 'Có sẵn', type: 'Bán lẻ', condition: 'Mới', note: '' });
 const formConvert = ref({ quantity: 1 });
 
 // ─── API data & loading ───────────────────────────────────────────────────────
@@ -55,8 +55,25 @@ const apiError = ref('');
 
 // books = danh sách đầu truyện từ API
 const books = ref<any[]>([]);
-
+const bustCache = ref(false);
 const scannerStore = useScannerStore();
+
+// Thay hàm cũ bằng:
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000';
+
+const resolveCoverUrl = (url: string | null | undefined, bust = false) => {
+  if (!url) return 'https://via.placeholder.com/50x70';
+  let resolved: string;
+  if (url.startsWith('http')) {
+    resolved = url;
+  } else {
+    resolved = `${API_BASE}${url}`;
+  }
+  // Cache-bust sau CRUD để img element reload
+  return bust ? `${resolved}?t=${Date.now()}` : resolved;
+};
+
+
 
 // ─── Quick Intake state ──────────────────────────────────────────────────────
 const isQuickIntakeModalOpen = ref(false);
@@ -68,6 +85,7 @@ const quickIntakeForm = ref({
   author: '',
   description: '',
   cover_url: '',
+  publisher: '',
   categories: [] as string[],
   page_count: null as number | null,
   published_date: '',
@@ -218,6 +236,7 @@ const resetQuickIntakeForm = () => {
     author: '',
     description: '',
     cover_url: '',
+    publisher: '',
     categories: [],
     page_count: null,
     published_date: '',
@@ -234,6 +253,7 @@ const applyMetadata = (
   metadata: {
     name: string;
     author: string;
+    publisher: string;
     genre: string;
     description: string;
     cover_url: string;
@@ -251,6 +271,7 @@ const applyMetadata = (
     quickIntakeForm.value.author = metadata.author.trim();
   }
   quickIntakeForm.value.description = metadata.description;
+  quickIntakeForm.value.publisher = metadata.publisher;
   quickIntakeForm.value.cover_url = metadata.cover_url;
   quickIntakeForm.value.categories = normalizedGenres;
 
@@ -263,6 +284,9 @@ const applyMetadata = (
         : "fallback nội bộ";
   metadataMessage.value = `Đã tự điền (${sourceLabel}): ${parsed.title} (Tập ${parsed.volume}).`;
 };
+const editBookCoverPreview = computed(() =>
+  resolveCoverUrl(formBook.value.cover_url)
+);
 
 const lookupMetadataByIsbn = async (rawIsbn: string) => {
   const isbn = normalizeIsbn(rawIsbn);
@@ -327,6 +351,7 @@ const processQuickIntake = async () => {
       author: quickIntakeForm.value.author.trim() || "Unknown",
       description: normalizedDescription,
       cover_url: normalizedCover || null,
+      publisher: quickIntakeForm.value.publisher.trim() || null,
       categories: quickIntakeForm.value.categories,
       page_count: quickIntakeForm.value.page_count || null,
       published_date: quickIntakeForm.value.published_date.trim() || null,
@@ -350,6 +375,7 @@ const processQuickIntake = async () => {
 async function loadTitles(q?: string) {
   isLoading.value = true;
   apiError.value = '';
+  bustCache.value = true;
   try {
     const data = await fetchTitlesWithVolumes(q, token.value);
     books.value = data.map(title => ({
@@ -360,7 +386,8 @@ async function loadTitles(q?: string) {
       author: title.author ?? '',
       genre: title.genre ?? '',
       publisher: title.publisher ?? '',
-      image: title.cover_url ? `http://127.0.0.1:8000${title.cover_url}` : 'https://via.placeholder.com/50x70',
+      cover_url: title.cover_url,
+      image: resolveCoverUrl(title.cover_url, bustCache.value),
       _raw: title,
       volumes: title.volumes.map(vol => ({
         id: vol.id,
@@ -393,6 +420,7 @@ async function loadTitles(q?: string) {
     apiError.value = e?.message ?? 'Không tải được danh sách truyện.';
     addNotification?.('error', apiError.value);
   } finally {
+    bustCache.value = false;
     isLoading.value = false;
   }
 }
@@ -476,11 +504,12 @@ const openItemsModal = (vol: any) => {
 
 // ─── CRUD Books ──────────────────
 const openAddBook = () => {
-  formBook.value = { id: 0, code: '', name: '', description: '', author: '', genre: '', publisher: '', image: '', volumes: [] };
+  formBook.value = { id: 0, code: '', name: '', description: '', author: '', genre: '', publisher: '', cover_url: '', image: '', volumes: [] };
   isAddBookModalOpen.value = true;
 };
 const openEditBook = (book: any) => {
-  formBook.value = { ...book };
+  formBook.value = { ...book, cover_url: book._raw?.cover_url || '',
+    image: book.image, };
   isEditBookModalOpen.value = true;
 };
 const saveBook = async () => {
@@ -491,6 +520,7 @@ const saveBook = async () => {
       author: formBook.value.author,
       genre: formBook.value.genre,
       publisher: formBook.value.publisher,
+      cover_url: formBook.value.cover_url || null,
       request_id: buildRequestId('book'),
     };
     if (formBook.value.id) {
@@ -564,6 +594,7 @@ const saveVolume = async () => {
             p_sell_new: Number(String(formVolume.value.price).replace(/\D/g, '')),
             description: selectedBook.value.description || '',
             cover_url: null,
+            publisher: selectedBook.value.publisher || null,
             categories: selectedBook.value.genre ? [selectedBook.value.genre] : [],
             page_count: null,
             published_date: null,
@@ -598,14 +629,31 @@ const deleteVolume = async (book: any, volId: number) => {
   }
 };
 
-// ─── CRUD Items ────────────────────────────────────────────────────────────────
+const convertToRentalSingle = async (item: any) => {
+  if (await showConfirm(`Bạn có muốn chuyển bản sao ${item.id} sang hàng thuê không?`)) {
+    try {
+      await apiUpdateItem(item.id, {
+        status: item.status,
+        item_type: 'rental',
+        condition_level: item.condition === 'Tốt' ? 100 : (item.condition === 'Trung bình' ? 50 : 20),
+        notes: item.note,
+        request_id: buildRequestId('convert-single')
+      });
+      addNotification('success', 'Chuyển sang hàng thuê thành công!');
+      await loadTitles();
+    } catch (e: any) {
+      addNotification('error', 'Lỗi: ' + e.message);
+    }
+  }
+};
 const openAddItem = () => {
-  formItem.value = { id: '', status: 'available', condition: 'Mới', note: '' };
+  formItem.value = { id: '', status: 'Có sẵn', type: 'Bán lẻ', condition: 'Mới', note: '' };
   isAddItemModalOpen.value = true;
 };
 const openEditItem = (item: any) => {
   formItem.value = { ...item };
-  formItem.value.status = reverseStatusMap[item.status] || 'available';
+  formItem.value.status = reverseStatusMap[item.status] || item.status;
+  formItem.value.type = (item.type === 'retail' || item.type === 'Bán lẻ') ? 'Bán lẻ' : 'Thuê';
   isEditItemModalOpen.value = true;
 };
 const saveItem = async () => {
@@ -617,6 +665,7 @@ const saveItem = async () => {
    if (formItem.value.id && !isAddItemModalOpen.value) {
        await apiUpdateItem(formItem.value.id, {
            status: statusToSend,
+           item_type: formItem.value.type === 'Bán lẻ' ? 'retail' : 'rental',
            condition_level: conditionVal,
            notes: formItem.value.note || null,
            request_id: buildRequestId('update-item')
@@ -626,6 +675,7 @@ const saveItem = async () => {
        await apiCreateItem({
            volume_id: selectedVolume.value.id,
            id: formItem.value.id || null, 
+           item_type: formItem.value.type === 'Bán lẻ' ? 'retail' : 'rental',
            condition_level: conditionVal,
            notes: formItem.value.note || null,
            version_no: 1,
@@ -739,7 +789,6 @@ const formatVND = (val: number) => {
                <span class="material-icons" style="font-size: 1.2rem; vertical-align: middle; margin-right: 4px;">qr_code_scanner</span>
                Nhập nhanh (ISBN)
             </button>
-            <button class="btn-add" @click="openAddBook">+ Đầu truyện</button>
         </div>
       </div>
 
@@ -853,6 +902,7 @@ const formatVND = (val: number) => {
     <td>{{ items.note }}</td>
     <td>{{ items.version }}</td>
     <td class="text-center">
+      <button v-if="items.type === 'retail'" class="btn-action convert" title="Chuyển sang thuê" @click.stop="convertToRentalSingle(items)">🔄</button>
       <button class="btn-action edit" @click.stop="openEditItem(items)">✏️</button>
       <button class="btn-action delete" @click.stop="deleteItem(selectedVolume, items.id)">🗑️</button>
     </td>
@@ -912,6 +962,13 @@ const formatVND = (val: number) => {
             <input v-model="formBook.publisher" type="text" placeholder="Nhập tên NXB..." />
           </div>
           <div class="form-group full-width">
+            <label>Link ảnh bìa</label>
+            <input v-model="formBook.cover_url" type="text" placeholder="http://..." />
+          </div>
+          <div v-if="formBook.cover_url" class="cover-preview-wrap">
+            <img :src="editBookCoverPreview" alt="Bìa sách" class="cover-preview-img" />
+          </div>
+          <div class="form-group full-width">
             <label>Mô tả</label>
             <textarea v-model="formBook.description" rows="3"></textarea>
           </div>
@@ -959,9 +1016,16 @@ const formatVND = (val: number) => {
         @close="isAddItemModalOpen = false; isEditItemModalOpen = false"
       >
         <div class="form-grid">
-          <div class="form-group" v-if="isEditItemModalOpen">
-            <label>Mã vạch</label>
-            <input v-model="formItem.id" type="text" disabled />
+          <div class="form-group">
+            <label>Mã vạch (ISBN nếu là hàng bán)</label>
+            <input v-model="formItem.id" type="text" :placeholder="isEditItemModalOpen ? '' : 'Để trống nếu muốn tự tạo RNT-...'" :disabled="isEditItemModalOpen" />
+          </div>
+          <div class="form-group">
+            <label>Loại bản sao</label>
+            <select v-model="formItem.type">
+              <option>Bán lẻ</option>
+              <option>Thuê</option>
+            </select>
           </div>
           <div class="form-group">
             <label>Trạng thái</label>
@@ -1045,7 +1109,7 @@ const formatVND = (val: number) => {
           </div>
 
           <div v-if="quickIntakeForm.cover_url" class="cover-preview-wrap">
-            <img :src="quickIntakeForm.cover_url" alt="Bìa sách" class="cover-preview-img" />
+            <img :src="resolveCoverUrl(quickIntakeForm.cover_url)" alt="Bìa sách" class="cover-preview-img" />
           </div>
 
           <div class="form-group" :class="{ 'full-width': !quickIntakeForm.cover_url }">
@@ -1056,6 +1120,16 @@ const formatVND = (val: number) => {
           <div class="form-group">
             <label>Tác giả</label>
             <input v-model="quickIntakeForm.author" type="text" placeholder="VD: Gosho Aoyama" />
+          </div>
+
+          <div class="form-group">
+            <label>Nhà xuất bản</label>
+            <input v-model="quickIntakeForm.publisher" type="text" placeholder="VD: NXB Kim Đồng" />
+          </div>
+
+          <div class="form-group full-width">
+            <label>Link ảnh bìa</label>
+            <input v-model="quickIntakeForm.cover_url" type="text" placeholder="http://..." />
           </div>
 
           <div class="form-group full-width">
@@ -1120,6 +1194,13 @@ const formatVND = (val: number) => {
 .filter-select:focus { border-color: #2563eb; }
 .btn-add { background: #2563eb; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.3s;margin-left: 10px; }
 .btn-add:hover { background: #1d4ed8; }
+
+.btn-action { border: none; background: none; cursor: pointer; padding: 4px; border-radius: 4px; transition: 0.2s; }
+.btn-action:hover { background: #f3f4f6; }
+.btn-action.delete { color: #dc2626; }
+.btn-action.delete:hover { background: #fee2e2; }
+.btn-action.convert { color: #2563eb; background: #eff6ff; }
+.btn-action.convert:hover { background: #dbeafe; }
 
 .table-container { background: white; border-radius: 12px; border: 1px solid #e5e7eb; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
 table { width: 100%; border-collapse: collapse; }

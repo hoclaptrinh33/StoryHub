@@ -217,6 +217,7 @@ export type CreateVolumeRequest = {
   author: string;
   description: string;
   cover_url: string | null;
+  publisher: string | null;
   categories: string[];
   page_count: number | null;
   published_date: string | null;
@@ -233,6 +234,7 @@ export type TitleMutateRequest = {
   description: string | null;
   genre: string | null;
   publisher: string | null;
+  cover_url: string | null;
   request_id: string;
 };
 
@@ -247,6 +249,7 @@ export type VolumeMutateRequest = {
 export type ItemCreateRequest = {
   volume_id: number;
   id: string | null;
+  item_type: "retail" | "rental";
   condition_level: number;
   notes: string | null;
   version_no: number;
@@ -255,6 +258,7 @@ export type ItemCreateRequest = {
 
 export type ItemUpdateRequest = {
   status: string;
+  item_type?: "retail" | "rental";
   condition_level: number;
   notes: string | null;
   request_id: string;

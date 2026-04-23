@@ -83,6 +83,7 @@ class CreateVolumeRequest(BaseModel):
     categories: list[str] = Field(default_factory=list)
     page_count: int | None = Field(default=None, ge=1)
     published_date: str | None = Field(default=None, max_length=50)
+    publisher: str | None = Field(default=None, max_length=255)
     volume_number: int = Field(gt=0)
     isbn: str = Field(min_length=5, max_length=20)
     retail_stock: int = Field(ge=0)
@@ -349,43 +350,45 @@ async def list_inventory_items(
     auth.require_scope("inventory:read")
 
     query_str = """
-        SELECT
-            v.id AS volume_id,
-            v.isbn AS item_id,
-            t.name AS title_name,
-            v.volume_number,
-            v.isbn AS isbn,
-            v.p_sell_new AS p_sell_new,
-            v.retail_stock AS stock_quantity,
-            CASE 
-                WHEN v.p_sell_new <= 0 THEN 'unready'
-                WHEN v.retail_stock > 0 THEN 'available'
-                ELSE 'out_of_stock'
-            END AS status,
-            100 AS condition_level,
-            'retail' AS type
-        FROM volume v
-        JOIN title t ON v.title_id = t.id
-        WHERE v.deleted_at IS NULL AND v.isbn IS NOT NULL
-        
-        UNION ALL
-        
-        SELECT
-            v.id AS volume_id,
-            i.id AS item_id,
-            t.name AS title_name,
-            v.volume_number,
-            v.isbn AS isbn,
-            v.p_sell_new AS p_sell_new,
-            1 AS stock_quantity,
-            i.status,
-            i.condition_level,
-            'rental' AS type
-        FROM item i
-        JOIN volume v ON i.volume_id = v.id
-        JOIN title t ON v.title_id = t.id
-        WHERE i.deleted_at IS NULL
-    """
+    SELECT
+        v.id AS volume_id,
+        v.isbn AS item_id,
+        t.name AS title_name,
+        v.volume_number,
+        v.isbn AS isbn,
+        v.p_sell_new AS p_sell_new,
+        v.retail_stock AS stock_quantity,
+        CASE 
+            WHEN v.p_sell_new <= 0 THEN 'unready'
+            WHEN v.retail_stock > 0 THEN 'available'
+            ELSE 'out_of_stock'
+        END AS status,
+        100 AS condition_level,
+        'retail' AS type
+    FROM volume v
+    JOIN title t ON v.title_id = t.id
+    WHERE v.deleted_at IS NULL AND v.isbn IS NOT NULL
+    
+    UNION ALL
+    
+    SELECT
+        v.id AS volume_id,
+        i.id AS item_id,             -- giữ nguyên item id cho cột id
+        t.name AS title_name,
+        v.volume_number,
+        v.isbn AS isbn,
+        v.p_sell_new AS p_sell_new,
+        1 AS stock_quantity,
+        i.status,
+        i.condition_level,
+        i.item_type AS type
+    FROM item i
+    JOIN volume v ON i.volume_id = v.id
+    JOIN title t ON v.title_id = t.id
+    WHERE i.deleted_at IS NULL
+        AND i.status = 'available'   -- chỉ lấy item khả dụng
+"""
+
     
     params: dict[str, object] = {}
     if q:
@@ -402,7 +405,7 @@ async def list_inventory_items(
             id=row["item_id"],
             volume_id=row["volume_id"],
             name=f"{row['title_name']} Tập {row['volume_number']}",
-            code=row["isbn"] or row["item_id"],
+            code=row["isbn"] if row["type"] == "retail" else row["item_id"],
             price=compute_sell_price(
                 condition_level=int(row["condition_level"]),
                 p_sell_new=int(row["p_sell_new"]),
@@ -538,8 +541,8 @@ async def convert_to_rental(
             new_skus.append(new_sku)
             await session.execute(
                 text(
-                    """INSERT INTO item (id, volume_id, condition_level, status, health_percent) 
-                       VALUES (:id, :vid, 100, 'available', 100)"""
+                    """INSERT INTO item (id, volume_id, condition_level, status, health_percent, item_type) 
+                       VALUES (:id, :vid, 100, 'available', 100, 'rental')"""
                 ),
                 {"id": new_sku, "vid": payload.volume_id}
             )
@@ -675,6 +678,7 @@ async def create_volume(
     ]
     normalized_genre = ", ".join(normalized_categories)
     normalized_published_date = (payload.published_date or "").strip()
+    normalized_publisher = (payload.publisher or "").strip()
     normalized_page_count = payload.page_count if payload.page_count and payload.page_count > 0 else None
 
     if normalized_cover_url and is_remote_image_url(normalized_cover_url):
@@ -736,6 +740,10 @@ async def create_volume(
                             WHEN :genre <> '' THEN :genre
                             ELSE genre
                         END,
+                        publisher = CASE
+                            WHEN :publisher <> '' THEN :publisher
+                            ELSE publisher
+                        END,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = :title_id
                     """
@@ -746,14 +754,15 @@ async def create_volume(
                     "description": normalized_description,
                     "cover_url": normalized_cover_url,
                     "genre": normalized_genre,
+                    "publisher": normalized_publisher,
                 },
             )
         else:
             await session.execute(
                 text(
                     """
-                    INSERT INTO title (name, author, description, cover_url, genre)
-                    VALUES (:name, :author, :description, :cover_url, :genre)
+                    INSERT INTO title (name, author, description, cover_url, genre, publisher)
+                    VALUES (:name, :author, :description, :cover_url, :genre, :publisher)
                     """
                 ),
                 {
@@ -762,6 +771,7 @@ async def create_volume(
                     "description": normalized_description or None,
                     "cover_url": normalized_cover_url or None,
                     "genre": normalized_genre or None,
+                    "publisher": normalized_publisher or None,
                 }
             )
             title_id_res = await session.execute(text("SELECT last_insert_rowid() AS value"))
@@ -1058,7 +1068,7 @@ async def list_titles_with_volumes(
         vol_id_placeholders = ",".join(str(i) for i in volume_ids)
         item_result = await session.execute(
             text(f"""
-                SELECT id, volume_id, status, condition_level, notes, version_no, reserved_at, reservation_expire_at
+                SELECT id, volume_id, status, item_type, condition_level, notes, version_no, reserved_at, reservation_expire_at
                 FROM item
                 WHERE volume_id IN ({vol_id_placeholders}) AND deleted_at IS NULL
 
@@ -1075,7 +1085,7 @@ async def list_titles_with_volumes(
             row = TitleItemRow(
                 id=item_id,
                 status=str(ir["status"]),
-                type="rental",
+                type=str(ir["item_type"] or "rental"),
                 condition_level=int(ir["condition_level"]),
                 notes=ir["notes"],
                 has_barcode=is_real_barcode,
@@ -1137,6 +1147,8 @@ class TitleMutateRequest(BaseModel):
     description: str | None = None
     genre: str | None = None
     publisher: str | None = None
+    cover_url: str | None = None
+    request_id: str = Field(min_length=6, max_length=128)
 
 @router.post("/titles")
 async def create_new_title(
@@ -1145,13 +1157,35 @@ async def create_new_title(
     session: AsyncSession = Depends(get_db_session),
     event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
+    normalized_cover_url = (payload.cover_url or "").strip()
+    if normalized_cover_url and is_remote_image_url(normalized_cover_url):
+        try:
+            # We don't have ISBN here, so we use name hash or something similar,
+            # but ideally we store it by title ID. For now, name-based is fine
+            # if we don't want to change save_cover_from_url signature.
+            # Actually, let's use a temporary string if ISBN is missing.
+            normalized_cover_url = await asyncio.to_thread(
+                save_cover_from_url,
+                f"title_{uuid.uuid4().hex[:8]}",
+                normalized_cover_url,
+            )
+        except Exception:
+            pass
+
     result = await session.execute(
         text("""
-            INSERT INTO title (name, author, description, genre, publisher)
-            VALUES (:name, :author, :desc, :genre, :pub)
+            INSERT INTO title (name, author, description, genre, publisher, cover_url)
+            VALUES (:name, :author, :desc, :genre, :pub, :cover)
             RETURNING id
         """),
-        {"name": payload.name, "author": payload.author, "desc": payload.description, "genre": payload.genre, "pub": payload.publisher}
+        {
+            "name": payload.name, 
+            "author": payload.author, 
+            "desc": payload.description, 
+            "genre": payload.genre, 
+            "pub": payload.publisher,
+            "cover": normalized_cover_url or None
+        }
     )
     new_id = result.scalar()
     await session.commit()
@@ -1177,13 +1211,38 @@ async def update_title(
     session: AsyncSession = Depends(get_db_session),
     event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
+    normalized_cover_url = (payload.cover_url or "").strip()
+    if normalized_cover_url and is_remote_image_url(normalized_cover_url):
+        try:
+            normalized_cover_url = await asyncio.to_thread(
+                save_cover_from_url,
+                f"title_{title_id}",
+                normalized_cover_url,
+            )
+        except Exception:
+            pass
+
     await session.execute(
         text("""
             UPDATE title
-            SET name = :name, author = :author, description = :desc, genre = :genre, publisher = :pub, updated_at = CURRENT_TIMESTAMP
+            SET name = :name, 
+                author = :author, 
+                description = :desc, 
+                genre = :genre, 
+                publisher = :pub,
+                cover_url = :cover,
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = :id AND deleted_at IS NULL
         """),
-        {"id": title_id, "name": payload.name, "author": payload.author, "desc": payload.description, "genre": payload.genre, "pub": payload.publisher}
+        {
+            "id": title_id, 
+            "name": payload.name, 
+            "author": payload.author, 
+            "desc": payload.description, 
+            "genre": payload.genre, 
+            "pub": payload.publisher,
+            "cover": normalized_cover_url or None
+        }
     )
     await session.commit()
     await write_audit_log(
@@ -1320,7 +1379,7 @@ async def delete_volume(
 class ItemCreateRequest(BaseModel):
     volume_id: int
     id: str | None = None # barcode. If none, auto-generate RNT-{uuid}
-    type: Literal["retail", "rental"] = "retail"
+    item_type: Literal["retail", "rental"] = "retail"
     condition_level: int = Field(ge=0, le=100, default=100)
 
     notes: str | None = None
@@ -1328,6 +1387,7 @@ class ItemCreateRequest(BaseModel):
 
 class ItemUpdateRequest(BaseModel):
     status: str
+    item_type: Literal["retail", "rental"] | None = None
     condition_level: int = Field(ge=0, le=100)
     notes: str | None = None
 
@@ -1339,7 +1399,11 @@ async def create_item(
     session: AsyncSession = Depends(get_db_session), # noqa: B008
     event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
-    item_id = str(payload.id).strip() if (payload.id is not None and str(payload.id).strip()) else f"RNT-{str(uuid.uuid4()).replace('-', '')[:8].upper()}"
+    if payload.id is not None and str(payload.id).strip():
+        item_id = str(payload.id).strip()
+    else:
+        prefix = "RNT" if payload.item_type == "rental" else "SEL"
+        item_id = f"{prefix}-{str(uuid.uuid4()).replace('-', '')[:8].upper()}"
     
     # Kiem tra id xem co trung khong
     exist = await session.execute(text("SELECT id FROM item WHERE id = :id"), {"id": item_id})
@@ -1348,18 +1412,26 @@ async def create_item(
 
     await session.execute(
         text("""
-            INSERT INTO item (id, volume_id, status, condition_level, health_percent, version_no, notes)
-            VALUES (:id, :vid, 'available', :cond, :cond, :ver, :notes)
+            INSERT INTO item (id, volume_id, status, item_type, condition_level, health_percent, version_no, notes)
+            VALUES (:id, :vid, 'available', :type, :cond, :cond, :ver, :notes)
         """),
         {
             "id": item_id,
             "vid": payload.volume_id,
+            "type": payload.item_type,
             "cond": payload.condition_level,
             "ver": payload.version_no,
             "notes": payload.notes
         }
-
     )
+    
+    # Sync retail_stock
+    if payload.item_type == "retail":
+        await session.execute(
+            text("UPDATE volume SET retail_stock = (SELECT COUNT(*) FROM item WHERE volume_id = :vid AND item_type = 'retail' AND status = 'available' AND deleted_at IS NULL) WHERE id = :vid"),
+            {"vid": payload.volume_id}
+        )
+    
     await session.commit()
     await write_audit_log(
         session=session,
@@ -1386,11 +1458,31 @@ async def update_item(
     await session.execute(
         text("""
             UPDATE item
-            SET status = :status, condition_level = :cond, notes = :notes, updated_at = CURRENT_TIMESTAMP
+            SET status = :status, 
+                condition_level = :cond, 
+                notes = :notes, 
+                item_type = COALESCE(:type, item_type),
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = :id AND deleted_at IS NULL
         """),
-        {"id": item_id, "status": payload.status, "cond": payload.condition_level, "notes": payload.notes}
+        {
+            "id": item_id, 
+            "status": payload.status, 
+            "cond": payload.condition_level, 
+            "notes": payload.notes,
+            "type": payload.item_type
+        }
     )
+    
+    # Sync retail_stock (get volume_id first)
+    vol_id_res = await session.execute(text("SELECT volume_id FROM item WHERE id = :id"), {"id": item_id})
+    vol_id = vol_id_res.scalar()
+    if vol_id:
+        await session.execute(
+            text("UPDATE volume SET retail_stock = (SELECT COUNT(*) FROM item WHERE volume_id = :vid AND item_type = 'retail' AND deleted_at IS NULL) WHERE id = :vid"),
+            {"vid": vol_id}
+        )
+
     await session.commit()
     await write_audit_log(
         session=session,
@@ -1417,7 +1509,16 @@ async def delete_item(
         text("UPDATE item SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
         {"id": item_id}
     )
-    await session.commit()
+    
+    # Sync retail_stock (get volume_id first)
+    vol_id_res = await session.execute(text("SELECT volume_id FROM item WHERE id = :id"), {"id": item_id})
+    vol_id = vol_id_res.scalar()
+    if vol_id:
+        await session.execute(
+            text("UPDATE volume SET retail_stock = (SELECT COUNT(*) FROM item WHERE volume_id = :vid AND item_type = 'retail' AND deleted_at IS NULL) WHERE id = :vid"),
+            {"vid": vol_id}
+        )
+        
     await session.commit()
     await write_audit_log(
         session=session,

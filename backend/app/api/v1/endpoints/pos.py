@@ -168,86 +168,92 @@ async def create_pos_order(
     async with session.begin():
         pricing_rule = await resolve_active_price_rule(session)
         item_rows: list[dict[str, object]] = []
-        for item_id in payload.item_ids:
-            row_result = await session.execute(
-                text(
-                    """
-                    SELECT
-                        i.id,
-                        i.volume_id,
-                        i.status,
-                        i.reserved_by_customer_id,
-                        i.reservation_expire_at,
-                        i.condition_level,
-                        v.p_sell_new
+        for code in payload.item_ids:
+            # 1. Check if it's a specific Item
+            item_res = await session.execute(
+                text("""
+                    SELECT i.id, i.volume_id, i.status, i.reserved_by_customer_id, 
+                           i.reservation_expire_at, i.condition_level, v.p_sell_new
                     FROM item i
                     JOIN volume v ON v.id = i.volume_id
-                    WHERE i.id = :item_id
-                      AND i.deleted_at IS NULL
-                      AND v.deleted_at IS NULL;
-                    """
-                ),
-                {"item_id": item_id},
+                    WHERE i.id = :code AND i.deleted_at IS NULL AND v.deleted_at IS NULL
+                """),
+                {"code": code},
             )
-            row = row_result.mappings().first()
-            if row is None:
-                raise AppError(
-                    code="ITEM_NOT_AVAILABLE",
-                    message="Một hoặc nhiều sản phẩm không sẵn sàng cho giao dịch bán (có thể đã được bán hoặc thay đổi trạng thái).",
-                    status_code=status.HTTP_409_CONFLICT,
+            row = item_res.mappings().first()
+
+            if row:
+                # Same reservation logic as before
+                if row["status"] == "reserved" and row["reservation_expire_at"] is not None:
+                    expire_at = parse_iso_datetime(str(row["reservation_expire_at"]))
+                    if expire_at <= now:
+                        await session.execute(
+                            text("UPDATE item SET status = 'available', reserved_by_customer_id = NULL, reserved_at = NULL, reservation_expire_at = NULL, version_no = version_no + 1, updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
+                            {"id": code}
+                        )
+                        row = {**dict(row), "status": "available", "reserved_by_customer_id": None, "reservation_expire_at": None}
+
+                is_reserved_for_customer = (
+                    row["status"] == "reserved"
+                    and payload.customer_id is not None
+                    and row["reserved_by_customer_id"] == payload.customer_id
                 )
-
-            if row["status"] == "reserved" and row["reservation_expire_at"] is not None:
-                expire_at = parse_iso_datetime(str(row["reservation_expire_at"]))
-                if expire_at <= now:
-                    await session.execute(
-                        text(
-                            """
-                            UPDATE item
-                            SET
-                                status = 'available',
-                                reserved_by_customer_id = NULL,
-                                reserved_at = NULL,
-                                reservation_expire_at = NULL,
-                                version_no = version_no + 1,
-                                updated_at = CURRENT_TIMESTAMP
-                            WHERE id = :item_id;
-                            """
-                        ),
-                        {"item_id": item_id},
+                if row["status"] != "available" and not is_reserved_for_customer:
+                    raise AppError(
+                        code="ITEM_NOT_AVAILABLE",
+                        message=f"Sản phẩm {code} không sẵn sàng (đang ở trạng thái {row['status']}).",
+                        status_code=status.HTTP_409_CONFLICT,
                     )
-                    await session.execute(
-                        text(
-                            """
-                            UPDATE reservation
-                            SET status = 'expired'
-                            WHERE item_id = :item_id
-                              AND status = 'active'
-                              AND expire_at <= :now_iso;
-                            """
-                        ),
-                        {"item_id": item_id, "now_iso": now_iso},
-                    )
-                    row = {
-                        **dict(row),
-                        "status": "available",
-                        "reserved_by_customer_id": None,
-                        "reservation_expire_at": None,
-                    }
-
-            is_reserved_for_customer = (
-                row["status"] == "reserved"
-                and payload.customer_id is not None
-                and row["reserved_by_customer_id"] == payload.customer_id
-            )
-            if row["status"] != "available" and not is_reserved_for_customer:
-                raise AppError(
-                    code="ITEM_NOT_AVAILABLE",
-                    message="Một hoặc nhiều sản phẩm không sẵn sàng cho giao dịch bán (có thể đã được bán hoặc thay đổi trạng thái).",
-                    status_code=status.HTTP_409_CONFLICT,
+                item_rows.append(dict(row))
+            else:
+                # 2. Fallback to Volume ISBN
+                vol_res = await session.execute(
+                    text("SELECT id, retail_stock, p_sell_new FROM volume WHERE isbn = :isbn AND deleted_at IS NULL"),
+                    {"isbn": code},
                 )
-
-            item_rows.append(dict(row))
+                vol_row = vol_res.mappings().first()
+                if vol_row:
+                    # Robust check: try to find an available individual retail item first
+                    avail_item_res = await session.execute(
+                        text("SELECT id, volume_id, status, condition_level FROM item WHERE volume_id = :vid AND item_type = 'retail' AND status = 'available' AND deleted_at IS NULL LIMIT 1"),
+                        {"vid": vol_row["id"]}
+                    )
+                    avail_item = avail_item_res.mappings().first()
+                    
+                    if avail_item:
+                        item_rows.append({
+                            "id": avail_item["id"],
+                            "volume_id": vol_row["id"],
+                            "status": "available",
+                            "reserved_by_customer_id": None,
+                            "reservation_expire_at": None,
+                            "condition_level": avail_item["condition_level"],
+                            "p_sell_new": vol_row["p_sell_new"]
+                        })
+                    elif int(vol_row["retail_stock"]) > 0:
+                        # Sell by quantity only
+                        item_rows.append({
+                            "id": None, 
+                            "volume_id": vol_row["id"],
+                            "status": "available",
+                            "reserved_by_customer_id": None,
+                            "reservation_expire_at": None,
+                            "condition_level": 100,
+                            "p_sell_new": vol_row["p_sell_new"],
+                            "is_qty_only": True
+                        })
+                    else:
+                        raise AppError(
+                            code="INSUFFICIENT_STOCK",
+                            message=f"ISBN {code} đã hết số lượng hàng bán lẻ.",
+                            status_code=status.HTTP_409_CONFLICT,
+                        )
+                else:
+                    raise AppError(
+                        code="ITEM_NOT_AVAILABLE",
+                        message=f"Không tìm thấy sản phẩm hoặc ISBN: {code}",
+                        status_code=status.HTTP_404_NOT_FOUND,
+                    )
 
         line_items: list[PosOrderLine] = []
         line_snapshots: list[dict[str, int | str]] = []
@@ -263,7 +269,7 @@ async def create_pos_order(
             subtotal += price
             line_items.append(
                 PosOrderLine(
-                    item_id=str(item_row["id"]),
+                    item_id=str(item_row["id"]) if item_row["id"] is not None else None,
                     final_sell_price=price,
                     quantity=1,
                     line_total=price,
@@ -271,7 +277,7 @@ async def create_pos_order(
             )
             line_snapshots.append(
                 {
-                    "item_id": str(item_row["id"]),
+                    "item_id": str(item_row["id"]) if item_row["id"] is not None else None,
                     "volume_id": int(item_row["volume_id"]),
                     "p_sell_new": p_sell_new,
                     "final_sell_price": price,
@@ -314,42 +320,50 @@ async def create_pos_order(
             )
 
         for item_row in item_rows:
-            lock_result = await session.execute(
-                text(
-                    """
-                    UPDATE item
-                    SET
-                        status = 'sold',
-                        reserved_by_customer_id = NULL,
-                        reserved_at = NULL,
-                        reservation_expire_at = NULL,
-                        version_no = version_no + 1,
-                        updated_at = CURRENT_TIMESTAMP
-                    WHERE id = :item_id
-                      AND deleted_at IS NULL
-                      AND (
-                            status = 'available'
-                            OR (
-                                status = 'reserved'
-                                AND :customer_id IS NOT NULL
-                                AND reserved_by_customer_id = :customer_id
-                                AND reservation_expire_at > :now_iso
-                            )
-                      );
-                    """
-                ),
-                {
-                    "item_id": item_row["id"],
-                    "customer_id": payload.customer_id,
-                    "now_iso": now_iso,
-                },
-            )
-            if lock_result.rowcount != 1:
-                raise AppError(
-                    code="ORDER_LOCK_CONFLICT",
-                    message="Không thể khóa các sản phẩm để tạo đơn hàng. Vui lòng thử lại sau.",
-                    status_code=status.HTTP_423_LOCKED,
+            # 1. Update individual Item status if exists
+            if item_row["id"] is not None:
+                lock_result = await session.execute(
+                    text(
+                        """
+                        UPDATE item
+                        SET
+                            status = 'sold',
+                            reserved_by_customer_id = NULL,
+                            reserved_at = NULL,
+                            reservation_expire_at = NULL,
+                            version_no = version_no + 1,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :item_id
+                        AND deleted_at IS NULL
+                        AND (
+                                status = 'available'
+                                OR (
+                                    status = 'reserved'
+                                    AND :customer_id IS NOT NULL
+                                    AND reserved_by_customer_id = :customer_id
+                                    AND reservation_expire_at > :now_iso
+                                )
+                        );
+                        """
+                    ),
+                    {
+                        "item_id": item_row["id"],
+                        "customer_id": payload.customer_id,
+                        "now_iso": now_iso,
+                    },
                 )
+                if lock_result.rowcount != 1:
+                    raise AppError(
+                        code="ORDER_LOCK_CONFLICT",
+                        message=f"Không thể khóa sản phẩm {item_row['id']} để tạo đơn hàng. Vui lòng thử lại sau.",
+                        status_code=status.HTTP_423_LOCKED,
+                    )
+            
+            # 2. Always decrement Volume stock
+            await session.execute(
+                text("UPDATE volume SET retail_stock = retail_stock - 1, updated_at = CURRENT_TIMESTAMP WHERE id = :vid"),
+                {"vid": item_row["volume_id"]}
+            )
 
         await session.execute(
             text(
@@ -515,16 +529,17 @@ async def create_pos_order(
             )
 
         for line_item in line_items:
-            await session.execute(
-                text(
-                    """
-                    UPDATE reservation
-                    SET status = 'converted', converted_to = 'sold'
-                    WHERE item_id = :item_id AND status = 'active';
-                    """
-                ),
-                {"item_id": line_item.item_id},
-            )
+            if line_item.item_id:
+                await session.execute(
+                    text(
+                        """
+                        UPDATE reservation
+                        SET status = 'converted', converted_to = 'sold'
+                        WHERE item_id = :item_id AND status = 'active';
+                        """
+                    ),
+                    {"item_id": line_item.item_id},
+                )
 
         ip_address, device_id = get_request_meta(request)
         if price_override_applied:
@@ -582,15 +597,16 @@ async def create_pos_order(
     )
 
     for item_row in item_rows:
-        await event_publisher.publish_item_status_changed(
-            item_id=str(item_row["id"]),
-            old_status=str(item_row["status"]),
-            new_status="sold",
-            changed_at=now_iso,
-            source_api="pos_create_order_v1",
-            changed_by=auth.user_id,
-            branch_id=auth.branch_id,
-        )
+        if item_row["id"]:
+            await event_publisher.publish_item_status_changed(
+                item_id=str(item_row["id"]),
+                old_status=str(item_row["status"]),
+                new_status="sold",
+                changed_at=now_iso,
+                source_api="pos_create_order_v1",
+                changed_by=auth.user_id,
+                branch_id=auth.branch_id,
+            )
 
     try:
         async with session.begin():

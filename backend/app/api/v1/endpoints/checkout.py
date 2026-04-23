@@ -219,142 +219,192 @@ async def unified_checkout(
     now_iso = to_iso_z(now)
     due_date_iso = to_iso_z(now + timedelta(days=payload.rental_days))
 
-    sales_isbns: list[str] = []
-    rental_skus: list[str] = []
-
-    for code in payload.scanned_codes:
-        if code.startswith("RNT-") or code.startswith("ITM-"):
-            rental_skus.append(code)
-        else:
-            sales_isbns.append(code)
+    sale_items_to_process: list[dict[str, object]] = [] # Items that exist in 'item' table as 'retail'
+    sale_volumes_to_process: list[dict[str, object]] = [] # Volumes scanned via ISBN
+    rental_items_to_process: list[dict[str, object]] = [] # Items that exist in 'item' table as 'rental'
 
     async with session.begin():
-        pricing_rule = await resolve_active_price_rule(session)
+        for code in payload.scanned_codes:
+            # 1. Check if it's an Item
+            item_res = await session.execute(
+                text("""
+                    SELECT i.id, i.volume_id, i.item_type, i.status, i.condition_level, v.p_sell_new
+                    FROM item i
+                    JOIN volume v ON v.id = i.volume_id
+                    WHERE i.id = :code AND i.deleted_at IS NULL AND v.deleted_at IS NULL
+                """),
+                {"code": code}
+            )
+            item_row = item_res.mappings().first()
 
-        total_sales = 0
-        sale_order_items: list[dict[str, int]] = []
-        if sales_isbns:
-            for isbn in sales_isbns:
-                vol_result = await session.execute(
-                    text(
-                        """
-                        SELECT id, retail_stock, p_sell_new
-                        FROM volume
-                        WHERE isbn = :isbn AND deleted_at IS NULL;
-                        """
-                    ),
-                    {"isbn": isbn},
-                )
-                volume_row = vol_result.mappings().first()
-                if volume_row is None or int(volume_row["retail_stock"]) < 1:
-                    raise AppError(
-                        code="INSUFFICIENT_STOCK",
-                        message=f"Sản phẩm mã {isbn} không còn đủ số lượng tồn kho để bán.",
+            if item_row:
+                if item_row["status"] != "available":
+                     raise AppError(
+                        code="ITEM_NOT_AVAILABLE",
+                        message=f"Sản phẩm {code} đang ở trạng thái '{item_row['status']}', không thể thực hiện giao dịch.",
                         status_code=status.HTTP_409_CONFLICT,
                     )
-
-                p_sell_new = int(volume_row["p_sell_new"])
-                sell_price = compute_sell_price(
-                    condition_level=100,
-                    p_sell_new=p_sell_new,
-                    used_demand_factor=pricing_rule.used_demand_factor,
-                    used_cap_ratio=pricing_rule.used_cap_ratio,
+                
+                if item_row["item_type"] == "rental":
+                    rental_items_to_process.append(dict(item_row))
+                else:
+                    sale_items_to_process.append(dict(item_row))
+            else:
+                # 2. Check if it's a Volume ISBN
+                vol_res = await session.execute(
+                    text("""
+                        SELECT id, isbn, retail_stock, p_sell_new
+                        FROM volume
+                        WHERE isbn = :code AND deleted_at IS NULL
+                    """),
+                    {"code": code}
                 )
-                total_sales += sell_price
-                sale_order_items.append(
-                    {
-                        "volume_id": int(volume_row["id"]),
-                        "p_sell_new": p_sell_new,
-                        "line_total": sell_price,
-                        "final_sell_price": sell_price,
-                    }
-                )
+                vol_row = vol_res.mappings().first()
+                if vol_row:
+                    # Robust check: try to find an available individual retail item first
+                    # because volume.retail_stock might be inconsistent with the item table
+                    avail_item_res = await session.execute(
+                        text("""
+                            SELECT i.id, i.volume_id, i.item_type, i.status, i.condition_level, v.p_sell_new
+                            FROM item i
+                            JOIN volume v ON v.id = i.volume_id
+                            WHERE i.volume_id = :vid AND i.item_type = 'retail' AND i.status = 'available' AND i.deleted_at IS NULL
+                            LIMIT 1
+                        """),
+                        {"vid": vol_row["id"]}
+                    )
+                    avail_item = avail_item_res.mappings().first()
+                    
+                    if avail_item:
+                        sale_items_to_process.append(dict(avail_item))
+                    elif int(vol_row["retail_stock"]) > 0:
+                        sale_volumes_to_process.append(dict(vol_row))
+                    else:
+                        raise AppError(
+                            code="INSUFFICIENT_STOCK",
+                            message=f"Tập truyện mã ISBN {code} đã hết hàng bán lẻ.",
+                            status_code=status.HTTP_409_CONFLICT,
+                        )
+                else:
+                    raise AppError(
+                        code="ITEM_NOT_FOUND",
+                        message=f"Không tìm thấy sản phẩm hoặc mã ISBN: {code}",
+                        status_code=status.HTTP_404_NOT_FOUND,
+                    )
 
-                await session.execute(
-                    text(
-                        """
-                        UPDATE volume
-                        SET retail_stock = retail_stock - 1, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = :id;
-                        """
-                    ),
-                    {"id": int(volume_row["id"])},
-                )
-
+        pricing_rule = await resolve_active_price_rule(session)
+        total_sales = 0
         total_rentals = 0
         total_deposit = 0
-        rental_item_rows: list[dict[str, int | str]] = []
-        if rental_skus:
-            if payload.customer_id is None:
+        
+        sale_order_items: list[dict[str, object]] = []
+        rental_item_rows: list[dict[str, object]] = []
+
+        # Process Sale Items (from 'item' table)
+        for it in sale_items_to_process:
+            p_sell_new = int(it["p_sell_new"])
+            sell_price = compute_sell_price(
+                condition_level=it["condition_level"],
+                p_sell_new=p_sell_new,
+                used_demand_factor=pricing_rule.used_demand_factor,
+                used_cap_ratio=pricing_rule.used_cap_ratio,
+            )
+            total_sales += sell_price
+            sale_order_items.append({
+                "item_id": it["id"],
+                "volume_id": it["volume_id"],
+                "p_sell_new": p_sell_new,
+                "line_total": sell_price,
+                "final_sell_price": sell_price,
+            })
+            # Update item status
+            await session.execute(
+                text("UPDATE item SET status = 'sold', updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
+                {"id": it["id"]}
+            )
+            # Update volume stock
+            await session.execute(
+                text("UPDATE volume SET retail_stock = retail_stock - 1, updated_at = CURRENT_TIMESTAMP WHERE id = :vid"),
+                {"vid": it["volume_id"]}
+            )
+
+        # Process Sale Volumes (from ISBN)
+        for vol in sale_volumes_to_process:
+            p_sell_new = int(vol["p_sell_new"])
+            sell_price = compute_sell_price(
+                condition_level=100, # Assume new for ISBN sales
+                p_sell_new=p_sell_new,
+                used_demand_factor=pricing_rule.used_demand_factor,
+                used_cap_ratio=pricing_rule.used_cap_ratio,
+            )
+            total_sales += sell_price
+            
+            # Find an available retail item to consume if possible
+            item_to_consume_res = await session.execute(
+                text("SELECT id FROM item WHERE volume_id = :vid AND item_type = 'retail' AND status = 'available' LIMIT 1"),
+                {"vid": vol["id"]}
+            )
+            item_to_consume = item_to_consume_res.scalar_one_or_none()
+            
+            sale_order_items.append({
+                "item_id": item_to_consume, # May be NULL if sold by qty only
+                "volume_id": vol["id"],
+                "p_sell_new": p_sell_new,
+                "line_total": sell_price,
+                "final_sell_price": sell_price,
+            })
+            
+            if item_to_consume:
+                await session.execute(
+                    text("UPDATE item SET status = 'sold', updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
+                    {"id": item_to_consume}
+                )
+            
+            await session.execute(
+                text("UPDATE volume SET retail_stock = retail_stock - 1, updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
+                {"id": vol["id"]}
+            )
+
+        # Process Rental Items
+        if rental_items_to_process and payload.customer_id is None:
+             raise AppError(
+                code="CUSTOMER_REQUIRED_FOR_RENTAL",
+                message="Giao dịch cho thuê bắt buộc phải có thông tin khách hàng.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
+
+        for it in rental_items_to_process:
+            if it["id"].upper().startswith("RNT-"):
                 raise AppError(
-                    code="CUSTOMER_REQUIRED_FOR_RENTAL",
-                    message="Giao dịch cho thuê bắt buộc phải có thông tin khách hàng để lập hợp đồng.",
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                )
-
-            for sku in rental_skus:
-                item_result = await session.execute(
-                    text(
-                        """
-                        SELECT i.id, i.volume_id, i.condition_level, i.status, v.p_sell_new
-                        FROM item i
-                        JOIN volume v ON v.id = i.volume_id
-                        WHERE i.id = :sku
-                          AND i.deleted_at IS NULL
-                          AND v.deleted_at IS NULL;
-                        """
-                    ),
-                    {"sku": sku},
-                )
-                item_row = item_result.mappings().first()
-                if item_row is None or item_row["status"] != "available":
-                    raise AppError(
-                        code="ITEM_NOT_AVAILABLE",
-                        message=f"Sản phẩm thuê {sku} không sẵn sàng (có thể đã được thuê hoặc đang chờ thanh toán).",
-                        status_code=status.HTTP_409_CONFLICT,
-                    )
-
-                p_sell_new = int(item_row["p_sell_new"])
-                p_rent = compute_rent_price(
-                    condition_level=int(item_row["condition_level"]),
-                    p_sell_new=p_sell_new,
-                    k_rent=pricing_rule.k_rent,
-                )
-                p_deposit = compute_deposit(
-                    p_sell_new=p_sell_new,
-                    k_deposit=pricing_rule.k_deposit,
-                    d_floor=pricing_rule.d_floor,
-                )
-
-                total_rentals += p_rent
-                total_deposit += p_deposit
-                rental_item_rows.append(
-                    {
-                        "item_id": sku,
-                        "volume_id": int(item_row["volume_id"]),
-                        "p_sell_new": p_sell_new,
-                        "rent_price": p_rent,
-                        "deposit": p_deposit,
-                        "condition_level": int(item_row["condition_level"]),
-                    }
-                )
-
-                lock_res = await session.execute(
-                    text(
-                        """
-                        UPDATE item
-                        SET status = 'rented', updated_at = CURRENT_TIMESTAMP
-                        WHERE id = :sku AND status = 'available';
-                        """
-                    ),
-                    {"sku": sku},
-                )
-                if lock_res.rowcount != 1:
-                    raise AppError(
-                        code="ITEM_LOCK_FAILED",
-                        message=f"Không thể khóa sản phẩm thuê {sku} để tạo giao dịch.",
-                        status_code=status.HTTP_409_CONFLICT,
-                    )
+                    code="CANNOT_RENT_VIRTUAL_ITEM",
+                    message=f"Bản sao {it['id']} được tạo tự động, không có mã vạch thật. Không thể cho thuê.",
+                    status_code=400)
+    
+            p_sell_new = int(it["p_sell_new"])
+            p_rent = compute_rent_price(
+                condition_level=it["condition_level"],
+                p_sell_new=p_sell_new,
+                k_rent=pricing_rule.k_rent,
+            )
+            p_deposit = compute_deposit(
+                p_sell_new=p_sell_new,
+                k_deposit=pricing_rule.k_deposit,
+                d_floor=pricing_rule.d_floor,
+            )
+            total_rentals += p_rent
+            total_deposit += p_deposit
+            rental_item_rows.append({
+                "item_id": it["id"],
+                "volume_id": it["volume_id"],
+                "p_sell_new": p_sell_new,
+                "rent_price": p_rent,
+                "deposit": p_deposit,
+                "condition_level": it["condition_level"],
+            })
+            await session.execute(
+                text("UPDATE item SET status = 'rented', updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
+                {"id": it["id"]}
+            )
 
         subtotal_fee = total_sales + total_rentals
         discount_total = _calculate_discount(subtotal_fee, payload.discount_type, payload.discount_value)
@@ -394,7 +444,7 @@ async def unified_checkout(
         order_id_out: str | None = None
         contract_id_out: str | None = None
 
-        if sales_isbns:
+        if sale_order_items:
             await session.execute(
                 text(
                     """
@@ -502,7 +552,7 @@ async def unified_checkout(
                             :pos_order_item_id,
                             NULL,
                             :volume_id,
-                            NULL,
+                            :item_id,
                             1,
                             :p_sell_new_snapshot,
                             :final_sell_price,
@@ -521,6 +571,7 @@ async def unified_checkout(
                         "pos_order_id": order_id,
                         "pos_order_item_id": pos_order_item_id,
                         "volume_id": line["volume_id"],
+                        "item_id": line.get("item_id"),
                         "p_sell_new_snapshot": line["p_sell_new"],
                         "final_sell_price": line["final_sell_price"],
                         "line_total": line["line_total"],
@@ -565,7 +616,7 @@ async def unified_checkout(
                     },
                 )
 
-        if rental_skus:
+        if rental_item_rows:
             await session.execute(
                 text(
                     """
