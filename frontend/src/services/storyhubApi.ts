@@ -840,6 +840,21 @@ export type TitleEntry = {
   cover_url: string | null;
   volumes: TitleVolume[];
 };
+export type InventoryHistoryItem = {
+  id: number;
+  timestamp: string;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  user_id: number | null;
+  user_name: string | null;
+  before: Record<string, any> | null;
+  after: Record<string, any> | null;
+  ip_address: string | null;
+  device_id: string | null;
+};
+
+
 
 export async function createTitle(payload: TitleMutateRequest): Promise<{ id: number }> {
   return request<{ id: number }>("/api/v1/kho/titles", {
@@ -916,6 +931,16 @@ export async function autoCreateItem(
   return request<AutoCreateItemPayload>("/api/v1/kho/items/auto-create", {
     method: "POST",
     body: JSON.stringify(payload),
+    token,
+  });
+}
+export async function fetchInventoryHistory(
+  limit = 100,
+  offset = 0,
+  token = "manager-demo",
+): Promise<InventoryHistoryItem[]> {
+  return request<InventoryHistoryItem[]>(`/api/v1/kho/history?limit=${limit}&offset=${offset}`, {
+    method: "GET",
     token,
   });
 }

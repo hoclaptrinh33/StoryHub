@@ -318,6 +318,78 @@
               </table>
             </div>
           </div>
+          <!-- Tab Lịch sử kho -->
+          <div v-if="currentTab === 'inventory_history'" class="tab-pane">
+  <div class="table-header">
+    <div class="header-left">
+      <h3>Biến động kho sách</h3>
+      <p>Theo dõi các hoạt động thêm, sửa, xóa đầu truyện, tập truyện, bản sao và chuyển đổi sang thuê</p>
+    </div>
+    <div class="header-right">
+      <button class="btn-icon-bg" @click="refreshHistory" :disabled="isLoadingHistory" title="Làm mới">
+        <span class="material-icons">refresh</span>
+      </button>
+      <div class="search-box">
+        <span class="material-icons">search</span>
+        <input
+          type="text"
+          v-model="historySearchQuery"
+          placeholder="Tìm theo hành động, đối tượng, ID..."
+        />
+      </div>
+    </div>
+  </div>
+
+  <div v-if="isLoadingHistory && inventoryHistory.length === 0" class="loading-state">
+    <div class="spinner"></div> <span>Đang tải dữ liệu...</span>
+  </div>
+  <div v-else class="table-container">
+    <div class="table-responsive">
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>Thời gian</th>
+            <th>Hành động</th>
+            <th>Đối tượng</th>
+            <th>ID</th>
+            <th>Người thực hiện</th>
+            <th>Chi tiết thay đổi</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="item in filteredHistory" :key="item.id">
+            <td class="text-muted">{{ formatDateTime(item.timestamp) }}</td>
+            <td><span :class="['badge-glass', getActionClass(item.action)]">{{ getActionLabel(item.action) }}</span></td>
+            <td><span class="entity-type">{{ getEntityLabel(item.entity_type) }}</span></td>
+            <td><span class="id-tag">{{ item.entity_id }}</span></td>
+            <td class="user-cell">
+              <span class="user-name">{{ item.user_name || `User #${item.user_id}` }}</span>
+              <small class="ip-addr" v-if="item.ip_address">{{ item.ip_address }}</small>
+            </td>
+            <td class="change-detail">
+              <div class="change-preview">
+                <span v-if="item.before && item.after">🔁 {{ formatChange(item.before, item.after) }}</span>
+                <span v-else-if="item.after">➕ {{ formatChange(null, item.after) }}</span>
+                <span v-else-if="item.before">❌ {{ formatChange(item.before, null) }}</span>
+                <span v-else>—</span>
+              </div>
+            </td>
+          </tr>
+          <tr v-if="filteredHistory.length === 0">
+            <td colspan="6" class="empty-row">Không có dữ liệu lịch sử kho</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    
+    <div v-if="hasMoreHistory" class="load-more-section">
+       <button class="btn-outline-premium" @click="loadMoreHistory" :disabled="isLoadingHistory">
+         <span v-if="isLoadingHistory" class="spinner-mini"></span>
+         {{ isLoadingHistory ? 'Đang tải...' : 'Xem thêm bản ghi' }}
+       </button>
+    </div>
+  </div>
+</div>
         </div>
       </Transition>
     </div>
@@ -327,6 +399,9 @@
 <script setup lang="ts">
 import { computed, inject, ref } from "vue";
 import { useRouter } from "vue-router";
+import { fetchInventoryHistory, type InventoryHistoryItem } from '../services/storyhubApi';
+import { useAuthStore } from '../stores/auth';
+
 
 import DefaultLayout from "../components/layout/defaultLayout.vue";
 
@@ -349,6 +424,48 @@ interface Appointment {
   note: string;
   status: "pending" | "completed";
 }
+const authStore = useAuthStore();
+const token = computed(() => authStore.token ?? 'manager-demo');
+
+const inventoryHistory = ref<InventoryHistoryItem[]>([]);
+const isLoadingHistory = ref(false);
+const historySearchQuery = ref('');
+const historyOffset = ref(0);
+const historyLimit = 100;
+const hasMoreHistory = ref(true);
+
+const loadInventoryHistory = async (isLoadMore = false) => {
+  if (!isLoadMore) {
+    historyOffset.value = 0;
+    inventoryHistory.value = [];
+    hasMoreHistory.value = true;
+  }
+  
+  if (isLoadingHistory.value) return;
+  
+  isLoadingHistory.value = true;
+  try {
+    const data = await fetchInventoryHistory(historyLimit, historyOffset.value, token.value);
+    if (data.length < historyLimit) {
+      hasMoreHistory.value = false;
+    }
+    
+    if (isLoadMore) {
+      inventoryHistory.value = [...inventoryHistory.value, ...data];
+    } else {
+      inventoryHistory.value = data;
+    }
+    
+    historyOffset.value += data.length;
+  } catch (err: any) {
+    addNotification?.('error', err.message || 'Không thể tải lịch sử kho');
+  } finally {
+    isLoadingHistory.value = false;
+  }
+};
+
+const refreshHistory = () => loadInventoryHistory(false);
+const loadMoreHistory = () => loadInventoryHistory(true);
 
 const slugify = (text: string) => {
   if (text.includes("Cho")) return "rental";
@@ -471,19 +588,96 @@ const tabs = [
   { id: "refunds", label: "Hoàn trả", icon: "assignment_return" },
   { id: "appointments", label: "Đặt lịch", icon: "event_available" },
   { id: "history", label: "Lịch sử", icon: "receipt_long" },
+  { id: "inventory_history", label: "Lịch sử kho", icon: "inventory_2" }
 ];
 
 const openReturnScreen = async () => {
   await router.push("/hoan-tra");
 };
 
-const handleTabClick = (tabId: string) => {
+const handleTabClick = async (tabId: string) => {
   if (tabId === "refunds") {
-    void openReturnScreen();
+    await openReturnScreen();
     return;
   }
   currentTab.value = tabId;
+  if (tabId === 'inventory_history' && inventoryHistory.value.length === 0) {
+    await loadInventoryHistory();
+  }
 };
+// hỗ trợ unils
+const formatDateTime = (isoString: string) => {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  return date.toLocaleString('vi-VN');
+};
+
+const getActionLabel = (action: string) => {
+  const map: Record<string, string> = {
+    'CREATE_TITLE': 'Thêm đầu truyện',
+    'UPDATE_TITLE': 'Sửa đầu truyện',
+    'DELETE_TITLE': 'Xóa đầu truyện',
+    'INVENTORY_VOLUME_CREATED': 'Thêm tập truyện',
+    'UPDATE_VOLUME': 'Sửa tập truyện',
+    'DELETE_VOLUME': 'Xóa tập truyện',
+    'CREATE_ITEM': 'Thêm bản sao',
+    'UPDATE_ITEM': 'Sửa bản sao',
+    'DELETE_ITEM': 'Xóa bản sao',
+    'INVENTORY_TO_RENTAL': 'Chuyển sang thuê',
+    'INVENTORY_COVER_IMPORTED': 'Nhập ảnh bìa',
+    'INVENTORY_VOLUME_PRICE_UPDATED': 'Cập nhật giá tập',
+  };
+  return map[action] || action;
+};
+
+const getActionClass = (action: string) => {
+  if (action.includes('CREATE') || action.includes('IMPORTED')) return 'success';
+  if (action.includes('UPDATE') || action.includes('PRICE_UPDATED')) return 'warning';
+  if (action.includes('DELETE')) return 'danger';
+  if (action.includes('TO_RENTAL')) return 'info';
+  return 'secondary';
+};
+
+const getEntityLabel = (entityType: string) => {
+  const map: Record<string, string> = {
+    'title': 'Đầu truyện',
+    'volume': 'Tập truyện',
+    'item': 'Bản sao',
+    'cover': 'Ảnh bìa',
+  };
+  return map[entityType] || entityType;
+};
+
+const formatChange = (before: any, after: any) => {
+  if (!before && after) {
+    // Thêm mới: chỉ lấy các trường chính
+    const keys = Object.keys(after).slice(0, 3);
+    return keys.map(k => `${k}: ${after[k]}`).join(', ') + (Object.keys(after).length > 3 ? '…' : '');
+  }
+  if (before && !after) {
+    // Xóa
+    const keys = Object.keys(before).slice(0, 3);
+    return keys.map(k => `${k}: ${before[k]}`).join(', ') + (Object.keys(before).length > 3 ? '…' : '');
+  }
+  if (before && after) {
+    // Sửa: chỉ hiển thị các trường thay đổi
+    const changed = Object.keys(after).filter(key => before[key] !== after[key]);
+    if (changed.length === 0) return 'Không thay đổi';
+    return changed.map(key => `${key}: ${before[key]} → ${after[key]}`).join(', ');
+  }
+  return '—';
+};
+
+const filteredHistory = computed(() => {
+  const query = historySearchQuery.value.toLowerCase();
+  if (!query) return inventoryHistory.value;
+  return inventoryHistory.value.filter(item =>
+    item.action.toLowerCase().includes(query) ||
+    item.entity_type.toLowerCase().includes(query) ||
+    item.entity_id.toLowerCase().includes(query) ||
+    (item.user_name?.toLowerCase().includes(query))
+  );
+});
 
 const filteredContracts = computed(() => {
   const query = searchQuery.value.toLowerCase();
@@ -1329,5 +1523,145 @@ tr:hover td {
     gap: 20px;
     align-items: flex-start;
   }
+}
+.text-success { color: #059669 !important; }
+.text-danger { color: #ef4444 !important; }
+.text-warning { color: #d97706 !important; }
+
+.italic {
+  font-style: italic;
+  font-size: 0.9rem;
+}
+
+/* Tùy chỉnh Badge cho kho */
+.badge-glass.success { background: rgba(5, 150, 105, 0.1); color: #059669; }
+.badge-glass.danger { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+.badge-glass.warning { background: rgba(217, 119, 6, 0.1); color: #d97706; }
+
+.history-table th, .history-table td {
+  text-align: left;
+  vertical-align: top;
+}
+.change-detail {
+  max-width: 350px;
+  word-break: break-word;
+}
+.change-preview {
+  font-size: 0.75rem;
+  font-family: 'Courier New', monospace;
+  background: #f1f5f9;
+  padding: 4px 8px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+}
+.badge-glass.info {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+.badge-glass.secondary {
+  background: #e2e8f0;
+  color: #475569;
+}
+.header-right {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.loading-state {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 60px;
+  gap: 16px;
+  color: #2563eb;
+  font-weight: 600;
+  background: white;
+  border-radius: 20px;
+  border: 1px solid #f1f5f9;
+}
+.load-more-section {
+  display: flex;
+  justify-content: center;
+  padding: 32px 0;
+  border-top: 1px solid #f1f5f9;
+  background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,1));
+}
+.btn-outline-premium {
+  background: white;
+  color: #0f172a;
+  border: 1px solid #e2e8f0;
+  padding: 10px 32px;
+  border-radius: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: 0.3s;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+.btn-outline-premium:hover:not(:disabled) {
+  border-color: #2563eb;
+  color: #2563eb;
+  transform: translateY(-2px);
+  box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.1);
+}
+.spinner-mini {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(37, 99, 235, 0.2);
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.user-cell {
+  display: flex;
+  flex-direction: column;
+}
+.user-name {
+  font-weight: 700;
+  color: #1e293b;
+}
+.ip-addr {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  font-family: 'Courier New', monospace;
+}
+.entity-type {
+  font-weight: 600;
+  color: #64748b;
+  font-size: 0.85rem;
+}
+.table-container {
+  background: white;
+  border-radius: 20px;
+  border: 1px solid #f1f5f9;
+  overflow: hidden;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+}
+.history-table th {
+  background: #f8fafc;
+  color: #475569;
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  padding: 16px 24px;
+  border-bottom: 2px solid #f1f5f9;
+}
+.history-table td {
+  padding: 16px 24px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid #e2e8f0;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 </style>

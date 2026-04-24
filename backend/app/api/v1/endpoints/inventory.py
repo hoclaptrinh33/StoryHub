@@ -32,6 +32,19 @@ from app.services import (
 router = APIRouter(prefix="/kho", tags=["kho"])
 
 
+class InventoryHistoryItem(BaseModel):
+    id: int
+    timestamp: str
+    action: str
+    entity_type: str
+    entity_id: str
+    user_id: int | None
+    user_name: str | None
+    before: dict | None
+    after: dict | None
+    ip_address: str | None
+    device_id: str | None
+    
 class ReserveInventoryItemRequest(BaseModel):
     item_id: str = Field(min_length=1)
     customer_id: int = Field(gt=0)
@@ -1202,7 +1215,13 @@ async def create_new_title(
         entity_type="title",
         entity_id=str(new_id),
         before=None,
-        after={"name": payload.name},
+        after={
+            "name": payload.name,
+            "author": payload.author,
+            "genre": payload.genre,
+            "publisher": payload.publisher,
+            "cover_url": normalized_cover_url
+        },
         ip_address=None,
         device_id=None,
     )
@@ -1251,14 +1270,27 @@ async def update_title(
         }
     )
     await session.commit()
+    old_title_res = await session.execute(
+        text("SELECT name, author, description, genre, publisher, cover_url FROM title WHERE id = :id"),
+        {"id": title_id}
+    )
+    old_title = old_title_res.mappings().first()
+    
     await write_audit_log(
         session=session,
         actor_user_id=auth.user_id,
         action="UPDATE_TITLE",
         entity_type="title",
         entity_id=str(title_id),
-        before=None,
-        after=None,
+        before=dict(old_title) if old_title else None,
+        after={
+            "name": payload.name,
+            "author": payload.author,
+            "description": payload.description,
+            "genre": payload.genre,
+            "publisher": payload.publisher,
+            "cover_url": normalized_cover_url
+        },
         ip_address=None,
         device_id=None,
     )
@@ -1291,8 +1323,8 @@ async def delete_title(
         action="DELETE_TITLE",
         entity_type="title",
         entity_id=str(title_id),
-        before=None,
-        after=None,
+        before=None, # In case of delete, after is usually enough if it contains what was deleted or just name
+        after={"name": "Deleted title " + str(title_id)},
         ip_address=None,
         device_id=None,
     )
@@ -1314,10 +1346,23 @@ class VolumeMutateRequest(BaseModel):
 async def update_volume(
     volume_id: int,
     payload: VolumeMutateRequest,
+    request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
     event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
+    old_vol = await session.execute(
+        text("SELECT volume_number, isbn, p_sell_new, retail_stock FROM volume WHERE id = :id AND deleted_at IS NULL"),
+        {"id": volume_id}
+    )
+    old_row = old_vol.mappings().first()
+    if not old_row:
+        raise AppError(code="VOLUME_NOT_FOUND", message="Không tìm thấy tập truyện", status_code=404)
+    
+    old_vol_num = old_row["volume_number"]
+    old_isbn = old_row["isbn"]
+    old_price = old_row["p_sell_new"]
+    old_stock = old_row["retail_stock"]
     await session.execute(
         text("""
             UPDATE volume
@@ -1326,23 +1371,34 @@ async def update_volume(
         """),
         {
             "id": volume_id, 
-            "vol_num": payload.volume_number, 
+            "vol_num": payload.volume_number,
             "isbn": payload.isbn, 
-            "p_sell": payload.p_sell_new, 
+            "p_sell": payload.p_sell_new,
             "stock": payload.retail_stock
         }
     )
     await session.commit()
+    ip_addr, device = get_request_meta(request)
     await write_audit_log(
         session=session,
         actor_user_id=auth.user_id,
         action="UPDATE_VOLUME",
         entity_type="volume",
         entity_id=str(volume_id),
-        before=None,
-        after=None,
-        ip_address=None,
-        device_id=None,
+        before={
+            "volume_number": old_vol_num,
+            "isbn": old_isbn,
+            "p_sell_new": old_price,
+            "retail_stock": old_stock
+        },
+        after={
+            "volume_number": payload.volume_number,
+            "isbn": payload.isbn,
+            "p_sell_new": payload.p_sell_new,
+            "retail_stock": payload.retail_stock
+        },
+        ip_address=ip_addr,
+        device_id=device,
     )
     await event_publisher.publish_inventory_data_changed(reason="volume_updated", branch_id=auth.branch_id)
     return success_response({"id": volume_id})
@@ -1350,10 +1406,19 @@ async def update_volume(
 @router.delete("/volumes/{volume_id}")
 async def delete_volume(
     volume_id: int,
+    request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
     event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
+    old_vol = await session.execute(
+        text("SELECT volume_number, isbn, p_sell_new, retail_stock FROM volume WHERE id = :id AND deleted_at IS NULL"),
+        {"id": volume_id}
+    )
+    old_row = old_vol.mappings().first()
+    if not old_row:
+        raise AppError(code="VOLUME_NOT_FOUND", message="Không tìm thấy tập truyện", status_code=404)
+    
     await session.execute(
         text("UPDATE volume SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
         {"id": volume_id}
@@ -1363,16 +1428,22 @@ async def delete_volume(
         {"id": volume_id}
     )
     await session.commit()
+    ip_addr, device = get_request_meta(request)
     await write_audit_log(
         session=session,
         actor_user_id=auth.user_id,
         action="DELETE_VOLUME",
         entity_type="volume",
         entity_id=str(volume_id),
-        before=None,
+        before={
+            "volume_number": old_row["volume_number"],
+            "isbn": old_row["isbn"],
+            "p_sell_new": old_row["p_sell_new"],
+            "retail_stock": old_row["retail_stock"]
+        },
         after=None,
-        ip_address=None,
-        device_id=None,
+        ip_address=ip_addr,
+        device_id=device,
     )
     await event_publisher.publish_inventory_data_changed(reason="volume_deleted", branch_id=auth.branch_id)
     return success_response({"deleted": True})
@@ -1405,6 +1476,7 @@ async def create_item(
     session: AsyncSession = Depends(get_db_session), # noqa: B008
     event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
+    
     if payload.id is not None and str(payload.id).strip():
         item_id = str(payload.id).strip()
     else:
@@ -1439,16 +1511,22 @@ async def create_item(
         )
     
     await session.commit()
+    ip_addr, device = get_request_meta(request)
     await write_audit_log(
         session=session,
         actor_user_id=auth.user_id,
-        action="CREATE_ITEM",
+        action="CREATE_ITEM",          # Sửa từ "UPDATE_ITEM" thành "CREATE_ITEM"
         entity_type="item",
         entity_id=item_id,
-        before=None,
-        after=None,
-        ip_address=None,
-        device_id=None,
+        before={},
+        after={
+            "volume_id": payload.volume_id,
+            "item_type": payload.item_type,
+            "condition_level": payload.condition_level,
+            "notes": payload.notes
+        },
+        ip_address=ip_addr,
+        device_id=device,
     )
     await event_publisher.publish_item_mutated(item_id=item_id, action="created", branch_id=auth.branch_id)
     return success_response({"id": item_id})
@@ -1457,10 +1535,18 @@ async def create_item(
 async def update_item(
     item_id: str,
     payload: ItemUpdateRequest,
+    request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
     event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
+    old_item = await session.execute(
+        text("SELECT status, item_type, condition_level, notes FROM item WHERE id = :id AND deleted_at IS NULL"),
+        {"id": item_id}
+    )
+    old_row = old_item.mappings().first()
+    if not old_row:
+        raise AppError(code="ITEM_NOT_FOUND", message="Không tìm thấy bản sao", status_code=404)
     await session.execute(
         text("""
             UPDATE item
@@ -1490,16 +1576,27 @@ async def update_item(
         )
 
     await session.commit()
+    ip_addr, device = get_request_meta(request)
     await write_audit_log(
         session=session,
         actor_user_id=auth.user_id,
         action="UPDATE_ITEM",
         entity_type="item",
         entity_id=item_id,
-        before=None,
-        after=None,
-        ip_address=None,
-        device_id=None,
+        before={
+            "status": old_row["status"],
+            "item_type": old_row["item_type"],
+            "condition_level": old_row["condition_level"],
+            "notes": old_row["notes"]
+        },
+        after={
+            "status": payload.status,
+            "item_type": payload.item_type or old_row["item_type"],
+            "condition_level": payload.condition_level,
+            "notes": payload.notes
+        },
+        ip_address=ip_addr,
+        device_id=device,
     )
     await event_publisher.publish_item_mutated(item_id=item_id, action="updated", branch_id=auth.branch_id)
     return success_response({"id": item_id})
@@ -1507,10 +1604,18 @@ async def update_item(
 @router.delete("/items/{item_id}")
 async def delete_item(
     item_id: str,
+    request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
     event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
+    old_item = await session.execute(
+        text("SELECT status, item_type, condition_level, notes FROM item WHERE id = :id AND deleted_at IS NULL"),
+        {"id": item_id}
+    )
+    old_row = old_item.mappings().first()
+    if not old_row:
+        raise AppError(code="ITEM_NOT_FOUND", message="Không tìm thấy bản sao", status_code=404)
     await session.execute(
         text("UPDATE item SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
         {"id": item_id}
@@ -1526,16 +1631,22 @@ async def delete_item(
         )
         
     await session.commit()
+    ip_addr, device = get_request_meta(request)
     await write_audit_log(
         session=session,
         actor_user_id=auth.user_id,
-        action="DELETE_ITEM",
+        action="DELETE_ITEM",          # Sửa từ "UPDATE_ITEM" thành "DELETE_ITEM"
         entity_type="item",
         entity_id=item_id,
-        before=None,
+        before={
+            "status": old_row["status"],
+            "item_type": old_row["item_type"],
+            "condition_level": old_row["condition_level"],
+            "notes": old_row["notes"]
+        },
         after=None,
-        ip_address=None,
-        device_id=None,
+        ip_address=ip_addr,
+        device_id=device,
     )
     await event_publisher.publish_item_mutated(item_id=item_id, action="deleted", branch_id=auth.branch_id)
     return success_response({"deleted": True})
@@ -1624,4 +1735,95 @@ async def auto_create_item(
         type=new_item["item_type"],
     )
 
+    # Ghi log
+    ip_addr, device = get_request_meta(request)
+    await write_audit_log(
+        session=session,
+        actor_user_id=auth.user_id,
+        action="CREATE_ITEM",
+        entity_type="item",
+        entity_id=barcode,
+        before=None,
+        after={
+            "volume_id": volume["id"],
+            "item_type": "retail",
+            "condition_level": 100,
+            "source": "auto-create"
+        },
+        ip_address=ip_addr,
+        device_id=device,
+    )
+
     return success_response(AutoCreateItemPayload(item=item_data))
+
+@router.get("/history", response_model=ResponseEnvelope[list[InventoryHistoryItem]])
+async def get_inventory_history(
+    limit: int = 100,
+    offset: int = 0,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[list[InventoryHistoryItem]]:
+    auth.require_role("manager", "owner")
+    auth.require_scope("inventory:read")
+
+    query = text("""
+        SELECT 
+            al.id,
+            al.created_at AS timestamp,
+            al.action,
+            al.entity_type,
+            al.entity_id,
+            al.actor_user_id,
+            al.before_json AS before,
+            al.after_json AS after,
+            al.ip_address,
+            al.device_id,
+            u.full_name AS user_name
+        FROM audit_log al
+        LEFT JOIN user u ON al.actor_user_id = u.id
+        WHERE al.entity_type IN ('title', 'volume', 'item', 'cover')
+        ORDER BY al.created_at DESC
+        LIMIT :limit OFFSET :offset
+    """)
+
+    result = await session.execute(query, {"limit": limit, "offset": offset})
+    rows = result.mappings().all()
+
+    items = []
+    for row in rows:
+        # SQLite raw query might return string or datetime for timestamp
+        ts_val = row["timestamp"]
+        if isinstance(ts_val, datetime):
+            ts_str = ts_val.isoformat()
+        elif isinstance(ts_val, str):
+            ts_str = ts_val.replace(" ", "T")
+        else:
+            ts_str = str(ts_val or "")
+
+        # row["before"] and row["after"] are Text in model, need json.loads
+        try:
+            b_val = row["before"]
+            before_data = json.loads(b_val) if b_val else None
+        except (json.JSONDecodeError, TypeError):
+            before_data = None
+            
+        try:
+            a_val = row["after"]
+            after_data = json.loads(a_val) if a_val else None
+        except (json.JSONDecodeError, TypeError):
+            after_data = None
+
+        items.append(InventoryHistoryItem(
+            id=row["id"],
+            timestamp=ts_str,
+            action=row["action"],
+            entity_type=row["entity_type"] or "",
+            entity_id=row["entity_id"] or "",
+            user_id=row["actor_user_id"],
+            user_name=row["user_name"],
+            before=before_data,
+            after=after_data,
+            ip_address=row["ip_address"],
+            device_id=row["device_id"],
+        ))
+    return success_response(items)
