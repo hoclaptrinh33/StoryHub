@@ -390,6 +390,11 @@
     </div>
   </div>
 </div>
+<div v-else-if="historyError" class="error-state">
+  <span class="material-icons">error_outline</span>
+  <p>{{ historyError }}</p>
+  <button @click="refreshHistory" class="btn-outline-premium">Thử lại</button>
+</div>
         </div>
       </Transition>
     </div>
@@ -426,7 +431,7 @@ interface Appointment {
 }
 const authStore = useAuthStore();
 const token = computed(() => authStore.token ?? 'manager-demo');
-
+const historyError = ref('')
 const inventoryHistory = ref<InventoryHistoryItem[]>([]);
 const isLoadingHistory = ref(false);
 const historySearchQuery = ref('');
@@ -435,14 +440,18 @@ const historyLimit = 100;
 const hasMoreHistory = ref(true);
 
 const loadInventoryHistory = async (isLoadMore = false) => {
+  if (!authStore.token) {
+    addNotification?.('error', 'Vui lòng đăng nhập để xem lịch sử kho');
+    router.push('/login');
+    return;
+  }
   if (!isLoadMore) {
     historyOffset.value = 0;
     inventoryHistory.value = [];
     hasMoreHistory.value = true;
   }
   
-  if (isLoadingHistory.value) return;
-  
+   if (isLoadingHistory.value) return;
   isLoadingHistory.value = true;
   try {
     const data = await fetchInventoryHistory(historyLimit, historyOffset.value, token.value);
@@ -458,7 +467,13 @@ const loadInventoryHistory = async (isLoadMore = false) => {
     
     historyOffset.value += data.length;
   } catch (err: any) {
-    addNotification?.('error', err.message || 'Không thể tải lịch sử kho');
+    console.error('Inventory history error:', err);
+    let errorMsg = err.message || 'Không thể tải lịch sử kho';
+    if (err.status === 401) errorMsg = 'Phiên đăng nhập hết hạn, vui lòng đăng nhập lại';
+    else if (err.status === 403) errorMsg = 'Bạn không có quyền xem lịch sử kho';
+    addNotification?.('error', errorMsg);
+
+    inventoryHistory.value = [];
   } finally {
     isLoadingHistory.value = false;
   }

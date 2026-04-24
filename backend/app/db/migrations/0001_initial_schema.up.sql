@@ -224,7 +224,7 @@ create table if not exists backup_job (
 
 create table if not exists audit_log (
    id            integer primary key,
-   actor_user_id text,
+   actor_user_id integer,
    action        text not null,
    entity_type   text not null,
    entity_id     text not null,

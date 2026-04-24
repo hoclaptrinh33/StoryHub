@@ -1,44 +1,71 @@
 import sqlite3
 import os
+import re
+from pathlib import Path
 
-db_path = 'storyhub.db'
+BASE_DIR = Path(__file__).parent
+MIGRATIONS_DIR = BASE_DIR / "backend" / "app" / "db" / "migrations"
 
-def fix():
-    conn = sqlite3.connect(db_path)
+# Kiểm tra thư mục migrations có tồn tại không
+if not MIGRATIONS_DIR.exists():
+    print(f"❌ Không tìm thấy thư mục migrations tại: {MIGRATIONS_DIR}")
+    exit(1)
+
+# Tìm tất cả file .up.sql trong thư mục migrations
+sql_files = list(MIGRATIONS_DIR.glob("*.up.sql"))
+if not sql_files:
+    print("❌ Không tìm thấy file .up.sql nào trong thư mục migrations")
+    exit(1)
+
+# Sắp xếp theo tên file (số thứ tự đầu tiên)
+def extract_number(filename):
+    match = re.search(r'^(\d+)', filename.name)
+    return int(match.group(1)) if match else 999
+
+sql_files.sort(key=extract_number)
+
+print(f"📂 Tìm thấy {len(sql_files)} migration files:")
+for f in sql_files:
+    print(f"   - {f.name}")
+
+# Tìm database
+db_files = list(BASE_DIR.glob("*.db"))
+if db_files:
+    DB_PATH = db_files[0]
+    print(f"📁 Tìm thấy database: {DB_PATH}")
+else:
+    DB_PATH = BASE_DIR / "storyhub.db"
+    print(f"📁 Chưa có database, sẽ tạo mới: {DB_PATH}")
+
+def run_migrations():
+    # Backup database cũ
+    if DB_PATH.exists() and DB_PATH.is_file():
+        backup = DB_PATH.with_suffix('.backup.db')
+        DB_PATH.rename(backup)
+        print(f"💾 Đã backup database cũ thành {backup}")
+    elif DB_PATH.exists():
+        print(f"⚠️ Đường dẫn {DB_PATH} là thư mục, bỏ qua backup.")
+    else:
+        print("ℹ️ Không có database cũ.")
+
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
-    # 1. Ensure schema_migrations table exists
-    cursor.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)")
-    
-    # Check if item_type exists
-    cursor.execute("PRAGMA table_info(item)")
-    columns = [row[1] for row in cursor.fetchall()]
-    
-    if 'item_type' in columns:
-        print("Detected 'item_type' column. Marking migration 0005 as applied.")
-        cursor.execute("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0005_add_item_type')")
-    
-    # Check if 'sold' is in check constraint
-    cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='item'")
-    sql = cursor.fetchone()[0]
-    if "'sold'" in sql:
-        print("Detected 'sold' status support. Marking migration 0006 as applied.")
-        cursor.execute("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0006_allow_sold_status')")
 
-    # Mark 0001, 0003, 0004 as applied if they likely are (tables exist)
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    tables = [row[0] for row in cursor.fetchall()]
-    
-    if 'title' in tables:
-        cursor.execute("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0001_initial_schema')")
-    if 'user' in tables:
-        cursor.execute("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0003_create_user_table')")
-    if 'price_rule' in tables:
-        cursor.execute("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0004_pricing_rules_and_snapshots')")
-        
-    conn.commit()
+    for migration_file in sql_files:
+        print(f"➡️ Đang chạy: {migration_file.name}")
+        with open(migration_file, 'r', encoding='utf-8') as f:
+            sql_script = f.read()
+        try:
+            cursor.executescript(sql_script)
+            conn.commit()
+        except Exception as e:
+            print(f"🔥 Lỗi tại {migration_file.name}: {e}")
+            conn.rollback()
+            break
+    else:
+        print("✅ Migration hoàn tất! Database đã sẵn sàng.")
+
     conn.close()
-    print("Migration table synced successfully.")
 
 if __name__ == "__main__":
-    fix()
+    run_migrations()

@@ -1109,7 +1109,7 @@ const formatVND = (val: number) => {
           </div>
 
           <div v-if="quickIntakeForm.cover_url" class="cover-preview-wrap">
-            <img :src="resolveCoverUrl(quickIntakeForm.cover_url)" alt="Bìa sách" class="cover-preview-img" />
+            <img :src="quickIntakeForm.cover_url" alt="Bìa sách" class="cover-preview-img" />
           </div>
 
           <div class="form-group" :class="{ 'full-width': !quickIntakeForm.cover_url }">

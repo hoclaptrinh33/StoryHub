@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
+
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Path, Request
@@ -1712,7 +1713,7 @@ async def auto_create_item(
     new_item_result = await session.execute(
         text("""
             SELECT i.id, i.volume_id, i.condition_level, i.status, i.item_type,
-                   t.name AS title_name, v.volume_number, v.isbn, v.p_sell_new
+                t.name AS title_name, v.volume_number, v.isbn, v.p_sell_new
             FROM item i
             JOIN volume v ON v.id = i.volume_id
             JOIN title t ON t.id = v.title_id
@@ -1767,18 +1768,9 @@ async def get_inventory_history(
     auth.require_scope("inventory:read")
 
     query = text("""
-        SELECT 
-            al.id,
-            al.created_at AS timestamp,
-            al.action,
-            al.entity_type,
-            al.entity_id,
-            al.actor_user_id,
-            al.before_json AS before,
-            al.after_json AS after,
-            al.ip_address,
-            al.device_id,
-            u.full_name AS user_name
+        SELECT al.id, al.created_at AS timestamp, al.action, al.entity_type, al.entity_id,
+            al.actor_user_id, al.before_json AS before, al.after_json AS after,
+            al.ip_address, al.device_id, u.full_name AS user_name
         FROM audit_log al
         LEFT JOIN user u ON al.actor_user_id = u.id
         WHERE al.entity_type IN ('title', 'volume', 'item', 'cover')
@@ -1812,6 +1804,12 @@ async def get_inventory_history(
             after_data = json.loads(a_val) if a_val else None
         except (json.JSONDecodeError, TypeError):
             after_data = None
+            
+        actor_user_id_raw = row["actor_user_id"]
+        try:
+            parsed_user_id = int(actor_user_id_raw) if actor_user_id_raw is not None else None
+        except (ValueError, TypeError):
+            parsed_user_id = None
 
         items.append(InventoryHistoryItem(
             id=row["id"],
@@ -1819,7 +1817,7 @@ async def get_inventory_history(
             action=row["action"],
             entity_type=row["entity_type"] or "",
             entity_id=row["entity_id"] or "",
-            user_id=row["actor_user_id"],
+            user_id=parsed_user_id,  # Sử dụng biến đã xử lý
             user_name=row["user_name"],
             before=before_data,
             after=after_data,
