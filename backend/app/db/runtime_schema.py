@@ -45,6 +45,22 @@ _RUNTIME_TABLE_DDL = (
         UNIQUE(refund_id, order_item_id)
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS inventory_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        title_name TEXT,
+        sub_text TEXT,
+        change_qty INTEGER DEFAULT 0,
+        old_qty INTEGER,
+        new_qty INTEGER,
+        note TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    """,
 )
 
 

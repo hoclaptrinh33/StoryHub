@@ -278,132 +278,7 @@
             </table>
           </div>
         </div>
-
-        <div class="card-glass ranking-card full-span">
-          <div class="card-header-lux">
-            <h3>🧾 Lịch sử giao dịch gần đây</h3>
-          </div>
-          <div class="table-lux">
-            <table>
-              <thead>
-                <tr>
-                  <th>Loại</th>
-                  <th>Mã GD</th>
-                  <th>Khách hàng</th>
-                  <th class="text-right">Giá trị</th>
-                  <th class="text-right">Thời gian</th>
-                  <th class="text-right">Hóa đơn</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="tx in recentTransactions" :key="tx.id">
-                  <td>
-                    <span class="tx-type" :class="tx.type === 'sale' ? 'sale' : 'rental'">
-                      {{ tx.type === "sale" ? "Bán" : "Thuê" }}
-                    </span>
-                  </td>
-                  <td>#{{ tx.reference_id }}</td>
-                  <td>{{ tx.customer_name }}</td>
-                  <td class="text-right"><span class="amount-tag primary">{{ formatCurrency(tx.amount) }}</span></td>
-                  <td class="text-right">{{ formatDateTime(tx.created_at) }}</td>
-                  <td class="text-right">
-                    <button
-                      type="button"
-                      class="btn-open-invoice"
-                      @click="openInvoiceFromTransaction(tx)"
-                    >
-                      Xem hóa đơn
-                    </button>
-                  </td>
-                </tr>
-                <tr v-if="recentTransactions.length === 0">
-                  <td colspan="6" class="text-center table-empty">Chưa có lịch sử giao dịch trong giai đoạn đã chọn.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
       </div>
-
-      <BaseModal :is-open="isInvoiceModalOpen" title="Hóa đơn giao dịch" @close="closeInvoiceModal">
-        <div class="invoice-shell">
-          <div v-if="isInvoiceLoading" class="invoice-loading-state">
-            <span class="material-icons rotating">sync</span>
-            Đang tải hóa đơn...
-          </div>
-
-          <div v-else-if="invoiceError" class="invoice-error-state">
-            <span class="material-icons">error_outline</span>
-            <p>{{ invoiceError }}</p>
-          </div>
-
-          <div v-else-if="activeInvoice" class="invoice-content">
-            <div class="invoice-grid">
-              <div>
-                <span class="meta-label">Mã hóa đơn</span>
-                <strong>{{ activeInvoice.invoice_key }}</strong>
-              </div>
-              <div>
-                <span class="meta-label">Loại giao dịch</span>
-                <strong>{{ activeInvoice.transaction_type === "sale" ? "Bán" : "Thuê" }}</strong>
-              </div>
-              <div>
-                <span class="meta-label">Khách hàng</span>
-                <strong>{{ activeInvoice.customer_name }}</strong>
-              </div>
-              <div>
-                <span class="meta-label">Thời gian</span>
-                <strong>{{ formatDateTime(activeInvoice.created_at) }}</strong>
-              </div>
-            </div>
-
-            <table class="invoice-line-table">
-              <thead>
-                <tr>
-                  <th>Mã</th>
-                  <th>Tên sách</th>
-                  <th>Loại</th>
-                  <th>Đơn giá</th>
-                  <th>Cọc</th>
-                  <th>Thành tiền</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(line, index) in activeInvoice.lines" :key="`${line.item_code}-${index}`">
-                  <td>{{ line.item_code }}</td>
-                  <td>{{ line.title }}</td>
-                  <td>{{ line.transaction_kind === "sale" ? "Bán" : "Thuê" }}</td>
-                  <td>{{ formatCurrency(line.unit_price) }}</td>
-                  <td>{{ formatCurrency(line.deposit) }}</td>
-                  <td><strong>{{ formatCurrency(line.line_total) }}</strong></td>
-                </tr>
-              </tbody>
-            </table>
-
-            <div class="invoice-total-lines">
-              <p><span>Tổng bán:</span> <strong>{{ formatCurrency(activeInvoice.subtotal_sales) }}</strong></p>
-              <p><span>Tổng thuê:</span> <strong>{{ formatCurrency(activeInvoice.subtotal_rentals) }}</strong></p>
-              <p><span>Tổng cọc:</span> <strong>{{ formatCurrency(activeInvoice.total_deposit) }}</strong></p>
-              <p v-if="activeInvoice.penalty_total > 0"><span>Phạt:</span> <strong>{{ formatCurrency(activeInvoice.penalty_total) }}</strong></p>
-              <p class="grand"><span>Tổng cộng:</span> <strong>{{ formatCurrency(activeInvoice.grand_total) }}</strong></p>
-            </div>
-
-            <div v-if="activeInvoice.payments.length > 0" class="invoice-payments">
-              <p class="payments-title">Thanh toán</p>
-              <ul>
-                <li v-for="payment in activeInvoice.payments" :key="`${payment.method}-${payment.amount}`">
-                  <span>{{ formatPaymentMethod(payment.method) }}</span>
-                  <strong>{{ formatCurrency(payment.amount) }}</strong>
-                </li>
-              </ul>
-            </div>
-          </div>
-        </div>
-
-        <template #footer>
-          <button type="button" class="backup-btn" @click="closeInvoiceModal">Đóng</button>
-        </template>
-      </BaseModal>
     </div>
   </DefaultLayout>
 </template>
@@ -411,20 +286,15 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from "vue";
 import DefaultLayout from '../components/layout/defaultLayout.vue';
-import BaseModal from "../components/layout/BaseModal.vue";
 import { Chart, registerables } from 'chart.js';
 import {
-  fetchCheckoutInvoice,
   StoryHubApiError,
   buildRequestId,
-  type CheckoutInvoicePayload,
   createSystemBackup,
   fetchLatestSystemBackup,
   fetchRevenueSummaryReport,
   type LatestBackupPayload,
-  type PosSplitPaymentMethod,
   type ReportTopCustomer,
-  type ReportTransactionItem,
   type RevenueTopTitle,
 } from "../services/storyhubApi";
 
@@ -435,15 +305,6 @@ type TopCustomer = {
   name: string;
   totalTransactions: number;
   totalSpent: number;
-};
-
-type RecentTransaction = {
-  id: string;
-  type: "sale" | "rental";
-  reference_id: string;
-  customer_name: string;
-  amount: number;
-  created_at: string;
 };
 
 type HotBook = {
@@ -494,11 +355,6 @@ const isBackupLoading = ref(false);
 const latestBackup = ref<LatestBackupPayload | null>(null);
 
 const topCustomers = ref<TopCustomer[]>([]);
-const recentTransactions = ref<RecentTransaction[]>([]);
-const isInvoiceModalOpen = ref(false);
-const isInvoiceLoading = ref(false);
-const invoiceError = ref("");
-const activeInvoice = ref<CheckoutInvoicePayload | null>(null);
 
 const hotBooks = ref<HotBook[]>([]);
 
@@ -524,19 +380,6 @@ const formatDateTime = (value?: string | null) => {
     return value;
   }
   return parsed.toLocaleString("vi-VN");
-};
-
-const formatPaymentMethod = (method: PosSplitPaymentMethod) => {
-  if (method === "cash") {
-    return "Tiền mặt";
-  }
-  if (method === "bank_transfer") {
-    return "Chuyển khoản";
-  }
-  if (method === "card") {
-    return "Thẻ";
-  }
-  return "Ví điện tử";
 };
 
 const toUtcIsoRange = (dateValue: string, endOfDay: boolean) => {
@@ -593,17 +436,6 @@ const toTopCustomers = (rows: ReportTopCustomer[]) => {
   }));
 };
 
-const toRecentTransactions = (rows: ReportTransactionItem[]) => {
-  return rows.map((row) => ({
-    id: `${row.transaction_type}-${row.reference_id}`,
-    type: row.transaction_type,
-    reference_id: row.reference_id,
-    customer_name: row.customer_name,
-    amount: row.amount,
-    created_at: row.created_at,
-  }));
-};
-
 const getApiErrorMessage = (error: unknown, fallback: string) => {
   if (error instanceof StoryHubApiError) {
     return error.message;
@@ -640,7 +472,6 @@ const refreshData = async () => {
     lowStockItems.value = payload.inventory_alerts.length;
     hotBooks.value = toHotBooks(payload.top_sell_titles, payload.top_rent_titles);
     topCustomers.value = toTopCustomers(payload.top_customers);
-    recentTransactions.value = toRecentTransactions(payload.recent_transactions);
 
     await nextTick();
     updateCharts();
@@ -679,28 +510,6 @@ const triggerBackup = async (backupType: "full" | "incremental") => {
     backupError.value = getApiErrorMessage(error, "Không thể tạo backup ở thời điểm hiện tại.");
   } finally {
     isBackupLoading.value = false;
-  }
-};
-
-const closeInvoiceModal = () => {
-  isInvoiceModalOpen.value = false;
-  isInvoiceLoading.value = false;
-  invoiceError.value = "";
-  activeInvoice.value = null;
-};
-
-const openInvoiceFromTransaction = async (tx: RecentTransaction) => {
-  isInvoiceModalOpen.value = true;
-  isInvoiceLoading.value = true;
-  invoiceError.value = "";
-  activeInvoice.value = null;
-
-  try {
-    activeInvoice.value = await fetchCheckoutInvoice(tx.type, tx.reference_id, "manager-demo");
-  } catch (error: unknown) {
-    invoiceError.value = getApiErrorMessage(error, "Không thể tải hóa đơn cho giao dịch này.");
-  } finally {
-    isInvoiceLoading.value = false;
   }
 };
 
@@ -952,10 +761,6 @@ onMounted(async () => {
 .ranking-card { padding: 32px 0; }
 .ranking-card .card-header-lux { padding: 0 32px; }
 
-.ranking-card.full-span {
-  grid-column: 1 / -1;
-}
-
 .backup-panel {
   margin-bottom: 24px;
 }
@@ -1058,146 +863,6 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-.btn-open-invoice {
-  border: 1px solid #bfdbfe;
-  background: #eff6ff;
-  color: #1d4ed8;
-  border-radius: 10px;
-  padding: 6px 10px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.btn-open-invoice:hover {
-  background: #dbeafe;
-}
-
-.invoice-shell {
-  min-height: 200px;
-}
-
-.invoice-loading-state,
-.invoice-error-state {
-  min-height: 180px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  font-weight: 700;
-  color: #334155;
-}
-
-.invoice-error-state {
-  color: #b91c1c;
-}
-
-.invoice-error-state p {
-  margin: 0;
-}
-
-.invoice-content {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.invoice-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 12px;
-  background: #f8fafc;
-}
-
-.invoice-line-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.invoice-line-table th,
-.invoice-line-table td {
-  border-bottom: 1px solid #f1f5f9;
-  padding: 9px;
-}
-
-.invoice-line-table th {
-  text-align: left;
-  background: #f8fafc;
-  font-size: 0.78rem;
-  text-transform: uppercase;
-  color: #475569;
-}
-
-.invoice-total-lines {
-  border: 1px dashed #cbd5e1;
-  border-radius: 12px;
-  padding: 10px 12px;
-}
-
-.invoice-total-lines p {
-  margin: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: #334155;
-  padding: 3px 0;
-}
-
-.invoice-total-lines p.grand {
-  margin-top: 4px;
-  border-top: 1px dashed #cbd5e1;
-  padding-top: 8px;
-  color: #0f172a;
-}
-
-.invoice-payments {
-  border: 1px solid #bfdbfe;
-  background: #eff6ff;
-  border-radius: 12px;
-  padding: 10px 12px;
-}
-
-.payments-title {
-  margin: 0 0 8px;
-  font-weight: 700;
-  color: #1e3a8a;
-}
-
-.invoice-payments ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 6px;
-}
-
-.invoice-payments li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  color: #1e3a8a;
-}
-
-.tx-type {
-  display: inline-flex;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  font-weight: 800;
-}
-
-.tx-type.sale {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.tx-type.rental {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-
 .member-info { display: flex; align-items: center; gap: 12px; }
 .rank { padding: 4px 10px; border-radius: 8px; font-weight: 800; font-size: 0.75rem; }
 .rank-1 { background: #fef9c3; color: #a16207; }
@@ -1219,6 +884,5 @@ onMounted(async () => {
   .analytics-row.secondary { grid-template-columns: 1fr; }
   .ranking-section { grid-template-columns: 1fr; }
   .backup-meta-grid { grid-template-columns: 1fr; }
-  .invoice-grid { grid-template-columns: 1fr; }
 }
 </style>

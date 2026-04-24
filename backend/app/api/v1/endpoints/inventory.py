@@ -27,9 +27,10 @@ from app.services import (
     save_cover_from_url,
     store_cached_response,
     write_audit_log,
+    write_inventory_log,
 )
 
-router = APIRouter(prefix="/kho", tags=["kho"])
+router = APIRouter(prefix="/inventory", tags=["inventory"])
 
 
 class ReserveInventoryItemRequest(BaseModel):
@@ -99,6 +100,22 @@ class CreateVolumePayload(BaseModel):
 class UpdateVolumePriceRequest(BaseModel):
     p_sell_new: int = Field(ge=1000, le=100_000_000)
     request_id: str = Field(min_length=6, max_length=128)
+
+
+class InventoryLogItem(BaseModel):
+    id: int
+    user_id: str
+    username: str | None = None
+    action_type: str
+    target_type: str
+    target_id: str
+    title_name: str | None = None
+    sub_text: str | None = None
+    change_qty: int
+    old_qty: int | None = None
+    new_qty: int | None = None
+    note: str | None = None
+    created_at: str
 
 
 class UpdateVolumePricePayload(BaseModel):
@@ -389,8 +406,19 @@ async def list_inventory_items(
     
     params: dict[str, object] = {}
     if q:
-        query_str = f"SELECT * FROM ({query_str}) WHERE title_name LIKE :q OR item_id LIKE :q OR isbn LIKE :q"
+        # Tối ưu cho search barcode/sku
+        q_clean = q.upper().replace("-", "").replace(" ", "").strip()
+        query_str = f"""
+            SELECT * FROM ({query_str}) 
+            WHERE 
+                title_name LIKE :q 
+                OR item_id LIKE :q 
+                OR isbn LIKE :q
+                OR REPLACE(REPLACE(item_id, '-', ''), ' ', '') LIKE :q_clean
+                OR REPLACE(REPLACE(isbn, '-', ''), ' ', '') LIKE :q_clean
+        """
         params["q"] = f"%{q}%"
+        params["q_clean"] = f"%{q_clean}%"
         
     query_str += " ORDER BY title_name ASC, volume_number ASC LIMIT 200"
 
@@ -402,7 +430,7 @@ async def list_inventory_items(
             id=row["item_id"],
             volume_id=row["volume_id"],
             name=f"{row['title_name']} Tập {row['volume_number']}",
-            code=row["isbn"] or row["item_id"],
+            code=row["item_id"],
             price=compute_sell_price(
                 condition_level=int(row["condition_level"]),
                 p_sell_new=int(row["p_sell_new"]),
@@ -509,19 +537,36 @@ async def convert_to_rental(
 
     async with session.begin():
         vol_result = await session.execute(
-            text("SELECT id, retail_stock FROM volume WHERE id = :vid AND deleted_at IS NULL"),
-            {"vid": payload.volume_id}
+            text(
+                """
+                SELECT v.id, v.retail_stock, v.volume_number, t.name AS title_name
+                FROM volume v
+                JOIN title t ON v.title_id = t.id
+                WHERE v.id = :vid AND v.deleted_at IS NULL
+                """
+            ),
+            {"vid": payload.volume_id},
         )
         volume_row = vol_result.mappings().first()
         if not volume_row:
-            raise AppError(code="VOLUME_NOT_FOUND", message="Không tìm thấy tập truyện tương ứng với ID đã cung cấp.", status_code=404)
-            
+            raise AppError(
+                code="VOLUME_NOT_FOUND",
+                message="Không tìm thấy tập truyện tương ứng với ID đã cung cấp.",
+                status_code=404,
+            )
+
         if volume_row["retail_stock"] < payload.quantity:
-            raise AppError(code="INSUFFICIENT_STOCK", message="Số lượng tồn kho hiện tại không đủ để thực hiện chuyển đổi sang hàng thuê.", status_code=409)
+            raise AppError(
+                code="INSUFFICIENT_STOCK",
+                message="Số lượng tồn kho hiện tại không đủ để thực hiện chuyển đổi sang hàng thuê.",
+                status_code=409,
+            )
 
         await session.execute(
-            text("UPDATE volume SET retail_stock = retail_stock - :qty, updated_at = CURRENT_TIMESTAMP WHERE id = :vid"),
-            {"qty": payload.quantity, "vid": payload.volume_id}
+            text(
+                "UPDATE volume SET retail_stock = retail_stock - :qty, updated_at = CURRENT_TIMESTAMP WHERE id = :vid"
+            ),
+            {"qty": payload.quantity, "vid": payload.volume_id},
         )
 
         new_skus = []
@@ -533,11 +578,40 @@ async def convert_to_rental(
                     """INSERT INTO item (id, volume_id, condition_level, status, health_percent) 
                        VALUES (:id, :vid, 100, 'available', 100)"""
                 ),
-                {"id": new_sku, "vid": payload.volume_id}
+                {"id": new_sku, "vid": payload.volume_id},
             )
 
         ip_addr, device = get_request_meta(request)
-        await write_audit_log(session, actor_user_id=auth.user_id, action="INVENTORY_TO_RENTAL", entity_type="volume", entity_id=str(payload.volume_id), before={"retail_stock": volume_row["retail_stock"]}, after={"retail_stock": volume_row["retail_stock"] - payload.quantity, "new_skus": new_skus}, ip_address=ip_addr, device_id=device)
+        # Ghi log kỹ thuật toàn hệ thống
+        await write_audit_log(
+            session,
+            actor_user_id=auth.user_id,
+            action="INVENTORY_TO_RENTAL",
+            entity_type="volume",
+            entity_id=str(payload.volume_id),
+            before={"retail_stock": volume_row["retail_stock"]},
+            after={
+                "retail_stock": volume_row["retail_stock"] - payload.quantity,
+                "new_skus": new_skus,
+            },
+            ip_address=ip_addr,
+            device_id=device,
+        )
+
+        # Ghi log lịch sử kho chuyên biệt
+        await write_inventory_log(
+            session,
+            user_id=auth.user_id,
+            action_type="CONVERT",
+            target_type="VOLUME",
+            target_id=str(payload.volume_id),
+            title_name=volume_row["title_name"],
+            sub_text=f"Tập {volume_row['volume_number']}",
+            change_qty=-payload.quantity,
+            old_qty=volume_row["retail_stock"],
+            new_qty=volume_row["retail_stock"] - payload.quantity,
+            note=f"Chuyển {payload.quantity} cuốn sang hàng thuê.",
+        )
 
     envelope = success_response(ConvertToRentalPayload(volume_id=payload.volume_id, converted_quantity=payload.quantity, new_skus=new_skus))
     try:
@@ -747,6 +821,8 @@ async def create_volume(
             title_id_res = await session.execute(text("SELECT last_insert_rowid() AS value"))
             title_id = int(title_id_res.scalar_one())
             
+        old_stock = 0
+        is_new_volume = False
         try:
             await session.execute(
                 text(
@@ -760,32 +836,51 @@ async def create_volume(
                     "vnum": payload.volume_number,
                     "isbn": payload.isbn,
                     "stock": payload.retail_stock,
-                    "price": payload.p_sell_new
-                }
+                    "price": payload.p_sell_new,
+                },
             )
             vol_id_res = await session.execute(text("SELECT last_insert_rowid() AS value"))
             volume_id = int(vol_id_res.scalar_one())
+            is_new_volume = True
         except IntegrityError:
+            # Lấy thông tin stock cũ trước khi update
+            vol_info_res = await session.execute(
+                text("SELECT id, retail_stock FROM volume WHERE title_id = :tid AND volume_number = :vnum"),
+                {"tid": title_id, "vnum": payload.volume_number}
+            )
+            vol_info = vol_info_res.mappings().first()
+            volume_id = vol_info["id"]
+            old_stock = vol_info["retail_stock"]
+
             await session.execute(
                 text(
                     """
                     UPDATE volume 
                     SET retail_stock = retail_stock + :qty, isbn = :isbn, updated_at = CURRENT_TIMESTAMP
-                    WHERE title_id = :tid AND volume_number = :vnum
+                    WHERE id = :vid
                     """
                 ),
                 {
                     "qty": payload.retail_stock,
                     "isbn": payload.isbn,
-                    "tid": title_id,
-                    "vnum": payload.volume_number
+                    "vid": volume_id
                 }
             )
-            vol_id_res = await session.execute(
-                text("SELECT id FROM volume WHERE title_id = :tid AND volume_number = :vnum"),
-                {"tid": title_id, "vnum": payload.volume_number}
-            )
-            volume_id = vol_id_res.mappings().first()["id"]
+
+        # Ghi log lịch sử kho chuyên biệt
+        await write_inventory_log(
+            session,
+            user_id=auth.user_id,
+            action_type="STOCK_IN",
+            target_type="VOLUME",
+            target_id=str(volume_id),
+            title_name=normalized_title_name,
+            sub_text=f"Tập {payload.volume_number}",
+            change_qty=payload.retail_stock,
+            old_qty=old_stock,
+            new_qty=old_stock + payload.retail_stock,
+            note="Thêm mới tập truyện" if is_new_volume else f"Cập nhật cộng dồn {payload.retail_stock} cuốn vào kho.",
+        )
 
         if has_extended_metadata:
             metadata_payload = {
@@ -859,10 +954,11 @@ async def update_volume_price(
         volume_result = await session.execute(
             text(
                 """
-                SELECT id, isbn, p_sell_new
-                FROM volume
-                WHERE id = :volume_id
-                  AND deleted_at IS NULL;
+                SELECT v.id, v.isbn, v.p_sell_new, v.volume_number, t.name AS title_name
+                FROM volume v
+                JOIN title t ON v.title_id = t.id
+                WHERE v.id = :volume_id
+                  AND v.deleted_at IS NULL;
                 """
             ),
             {"volume_id": volume_id},
@@ -871,7 +967,7 @@ async def update_volume_price(
         if volume_row is None:
             raise AppError(
                 code="VOLUME_NOT_FOUND",
-                message="Khong tim thay tap truyen can cap nhat gia.",
+                message="Không tìm thấy tập truyện cần cập nhật giá.",
                 status_code=status.HTTP_404_NOT_FOUND,
             )
 
@@ -893,6 +989,7 @@ async def update_volume_price(
         )
 
         ip_addr, device = get_request_meta(request)
+        # Ghi log kỹ thuật
         await write_audit_log(
             session,
             actor_user_id=auth.user_id,
@@ -903,6 +1000,21 @@ async def update_volume_price(
             after={"p_sell_new": payload.p_sell_new},
             ip_address=ip_addr,
             device_id=device,
+        )
+
+        # Ghi log lịch sử kho
+        await write_inventory_log(
+            session,
+            user_id=auth.user_id,
+            action_type="PRICE_CHANGE",
+            target_type="VOLUME",
+            target_id=str(volume_id),
+            title_name=volume_row["title_name"],
+            sub_text=f"Tập {volume_row['volume_number']}",
+            change_qty=0,
+            old_qty=None,
+            new_qty=None,
+            note=f"Cập nhật giá từ {old_price} sang {payload.p_sell_new}.",
         )
 
         envelope = success_response(
@@ -1381,3 +1493,41 @@ async def delete_item(
         device_id=None,
     )
     return success_response({"deleted": True})
+
+
+@router.get("/logs", response_model=ResponseEnvelope[list[InventoryLogItem]])
+async def list_inventory_logs(
+    limit: int = 50,
+    offset: int = 0,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[list[InventoryLogItem]]:
+    auth.require_role("manager", "owner")
+    auth.require_scope("inventory:read")
+
+    query = """
+        SELECT 
+            l.id,
+            l.user_id,
+            u.username,
+            l.action_type,
+            l.target_type,
+            l.target_id,
+            l.title_name,
+            l.sub_text,
+            l.change_qty,
+            l.old_qty,
+            l.new_qty,
+            l.note,
+            l.created_at
+        FROM inventory_log l
+        LEFT JOIN user u ON l.user_id = u.id
+        ORDER BY l.created_at DESC
+        LIMIT :limit OFFSET :offset
+    """
+
+    result = await session.execute(text(query), {"limit": limit, "offset": offset})
+    rows = result.mappings().all()
+
+    logs = [InventoryLogItem(**row) for row in rows]
+    return success_response(logs)

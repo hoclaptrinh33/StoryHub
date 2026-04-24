@@ -10,6 +10,7 @@ from app.api.v1.endpoints.rental import router as rental_router
 from app.api.v1.endpoints.system import router as system_router
 from app.api.v1.endpoints.checkout import router as checkout_router
 from app.api.v1.endpoints.auth import router as auth_router
+from app.api.v1.endpoints.promotions import router as promotions_router
 
 api_v1_router = APIRouter()
 api_v1_router.include_router(auth_router)
@@ -22,3 +23,4 @@ api_v1_router.include_router(checkout_router)
 api_v1_router.include_router(metadata_router)
 api_v1_router.include_router(report_router)
 api_v1_router.include_router(system_router)
+api_v1_router.include_router(promotions_router)

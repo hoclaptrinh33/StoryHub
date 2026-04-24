@@ -13,6 +13,19 @@ export const useScannerStore = defineStore('scanner', () => {
   const scanEventCounter = ref(0);
 
   const normalize = (val: string) => val.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  const canonicalizeScannedCode = (val: string) => {
+    const compact = val.trim().replace(/\s+/g, '');
+    if (!compact) {
+      return '';
+    }
+
+    const upperCompact = compact.toUpperCase();
+    if (upperCompact.startsWith('RTN-')) {
+      return `RNT-${compact.slice(4)}`;
+    }
+
+    return compact;
+  };
 
   function queuePendingCheckoutItem(item: InventoryItemListItem) {
     pendingCheckoutItems.value = [...pendingCheckoutItems.value, { ...item }];
@@ -29,63 +42,93 @@ export const useScannerStore = defineStore('scanner', () => {
   }
 
   async function processGlobalScan(code: string) {
-    if (isProcessing.value) return;
+    console.log('[SCANNER] processGlobalScan called with:', code);
+    if (isProcessing.value) {
+      console.log('[SCANNER] BLOCKED: isProcessing is true');
+      return;
+    }
     
     // Skip global processing if on the Return page to allow local specialized scanning
     if (router.currentRoute.value.path === '/hoan-tra') return;
 
-    isProcessing.value = true;
-    lastScannedCode.value = code;
-    
-    try {
-      // On dashboard: check if item is currently rented
-      if (router.currentRoute.value.path === '/') {
-        try {
-          const rentalStatus = await checkItemRentalStatus(code);
-          if (rentalStatus.rental_contract_id) {
-            // Item is currently rented, go to return page with contract
-            await router.push({ 
-              path: '/hoan-tra', 
-              query: { scan: rentalStatus.rental_contract_id } 
-            });
-            return;
+    const scannedCode = canonicalizeScannedCode(code);
+    if (!scannedCode) {
+      console.log('[SCANNER] BLOCKED: scannedCode is empty after canonicalize');
+      return;
+    }
+    console.log('[SCANNER] canonicalized:', scannedCode);
+
+      isProcessing.value = true;
+      lastScannedCode.value = scannedCode;
+      
+      try {
+        // On dashboard: check if item is currently rented
+        if (router.currentRoute.value.path === '/') {
+          try {
+            const rentalStatus = await checkItemRentalStatus(scannedCode);
+            if (rentalStatus.rental_contract_id) {
+              // Item is currently rented, go to return page with contract
+              await router.push({ 
+                path: '/hoan-tra', 
+                query: { scan: rentalStatus.rental_contract_id } 
+              });
+              return;
+            }
+          } catch {
+            // Skip
           }
-          // Item is not rented, continue to checkout/inventory logic below
-        } catch {
-          // Error checking rental status, continue to search by inventory
         }
-      }
 
-      // Search inventory for the code (for checkout or new rental)
-      const results = await fetchInventoryItems(code);
-      
-      // Match exactly by code or ID using normalized comparison
-      const normalizedCode = normalize(code);
-      
-      const exactMatch = results.find(item => 
-        normalize(item.code) === normalizedCode || 
-        normalize(item.id) === normalizedCode
-      );
+        // Search inventory
+        console.log('[SCANNER] Fetching inventory for:', scannedCode);
+        const results = await fetchInventoryItems(scannedCode);
+        console.log('[SCANNER] Search results count:', results.length, results.map(r => r.id));
+        
+        const normalizedCode = normalize(scannedCode);
+        const exactMatch = results.find(item => 
+          normalize(canonicalizeScannedCode(item.code)) === normalizedCode || 
+          normalize(canonicalizeScannedCode(item.id)) === normalizedCode
+        ) || (results.length === 1 ? results[0] : null);
 
-      if (exactMatch) {
-        lastScannedItem.value = exactMatch;
-        queuePendingCheckoutItem(exactMatch);
-        scanEventCounter.value++;
-        
-        // Found -> Redirect to Checkout if not there
-        if (router.currentRoute.value.path !== '/ban-hang') {
-          await router.push('/ban-hang');
+        console.log('[SCANNER] exactMatch:', exactMatch ? exactMatch.id : 'NULL');
+
+        if (exactMatch) {
+          lastScannedItem.value = exactMatch;
+          queuePendingCheckoutItem(exactMatch);
+          console.log('[SCANNER] Queued item, pending count:', pendingCheckoutItems.value.length);
+        } else {
+          lastScannedItem.value = null;
+          console.log('[SCANNER] No match found');
         }
-      } else {
-        lastScannedItem.value = null;
+
+        // Alert views
+        const oldCounter = scanEventCounter.value;
         scanEventCounter.value++;
+        console.log('[SCANNER] scanEventCounter:', oldCounter, '->', scanEventCounter.value);
         
-        // Not Found -> Redirect to Inventory and pre-fill creation
-        if (router.currentRoute.value.path !== '/kho') {
-          await router.push('/kho');
+        const upperScannedCode = scannedCode.toUpperCase();
+        const isInternalSku = upperScannedCode.startsWith('RNT-') || upperScannedCode.startsWith('RTN-') || upperScannedCode.startsWith('ITM-');
+        const isPotentialIsbn = /^[0-9-]{10,20}$/.test(scannedCode);
+
+        if (exactMatch) {
+          if (router.currentRoute.value.path !== '/ban-hang') {
+            console.log('[SCANNER] Redirecting to /ban-hang (exactMatch)');
+            await router.push('/ban-hang');
+            // Sau khi redirect, tăng counter lần nữa để checkout mới mount có thể nhận
+            console.log('[SCANNER] Post-redirect: bumping counter again');
+            scanEventCounter.value++;
+          }
+        } else {
+          if ((isInternalSku || isPotentialIsbn) && router.currentRoute.value.path !== '/ban-hang') {
+            console.log('[SCANNER] Redirecting to /ban-hang (isbn/sku)');
+            await router.push('/ban-hang');
+            scanEventCounter.value++;
+          } else if (!isInternalSku && !isPotentialIsbn && router.currentRoute.value.path !== '/kho') {
+            console.log('[SCANNER] Redirecting to /kho');
+            await router.push('/kho');
+          }
         }
-      }
-    } catch (error) {
+      } catch (error) {
       console.error('Lỗi khi xử lý mã quét toàn cục:', error);
     } finally {
       isProcessing.value = false;

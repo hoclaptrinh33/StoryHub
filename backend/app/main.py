@@ -74,7 +74,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins,
-        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1):5173",
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1):517[34]",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -90,7 +90,15 @@ def create_app() -> FastAPI:
     async def app_exception_handler(request: Request, exc: AppError) -> JSONResponse:
         details = None
         if exc.details:
-            details = [ErrorDetail.model_validate(item) for item in exc.details]
+            validated_details = []
+            for item in exc.details:
+                if isinstance(item, dict) and "message" not in item:
+                    item["message"] = "Gia tri khong hop le."
+                try:
+                    validated_details.append(ErrorDetail.model_validate(item))
+                except Exception:
+                    logger.warning("Failed to validate error detail: %s", item)
+            details = validated_details
 
         payload = error_response(
             code=exc.code,

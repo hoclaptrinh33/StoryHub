@@ -1,1333 +1,386 @@
 <template>
   <DefaultLayout>
-    <div class="management-container">
-      <div class="header-section">
-        <h2 class="page-title">Quản lý Nghiệp vụ</h2>
-        <div class="quick-stats">
-          <div class="stat-item">
-            <span class="label">Hợp đồng mới</span>
-            <span class="value">12</span>
-            <span class="trend up">+15%</span>
-          </div>
-          <div class="stat-item warning">
-            <span class="label">Sắp quá hạn</span>
-            <span class="value">08</span>
-          </div>
-          <div class="stat-item info">
-            <span class="label">Lịch hẹn hôm nay</span>
-            <span class="value">{{
-              appointments.filter((a) => isToday(a.date)).length
-            }}</span>
-          </div>
+    <div class="manager-shell">
+      <header class="manager-hero">
+        <div>
+          <p class="eyebrow">Bảng điều khiển Chủ sở hữu StoryHub</p>
+          <h1>Trung tâm Quản lý</h1>
+          <p class="hero-subtitle">
+            Một điểm đến duy nhất cho Dữ liệu & Kiểm tra, Khuyến mãi, Nhân sự & Quyền hạn, Giá cả, Hệ thống & Sao lưu.
+          </p>
         </div>
-      </div>
+        <span class="owner-badge">
+          <span class="material-icons" aria-hidden="true">verified_user</span>
+          chỉ dành cho chủ sở hữu
+        </span>
+      </header>
 
-      <div class="management-tabs">
+      <section class="kpi-strip">
+        <article class="kpi-card">
+          <p class="kpi-label">{{ currentKpi.primaryLabel }}</p>
+          <p class="kpi-value">{{ currentKpi.primaryValue }}</p>
+        </article>
+        <article class="kpi-card alt">
+          <p class="kpi-label">{{ currentKpi.secondaryLabel }}</p>
+          <p class="kpi-value">{{ currentKpi.secondaryValue }}</p>
+        </article>
+      </section>
+
+      <nav class="tab-strip" aria-label="Admin tabs">
         <button
           v-for="tab in tabs"
           :key="tab.id"
-          :class="['tab-item', { active: currentTab === tab.id }]"
-          @click="handleTabClick(tab.id)"
+          class="tab-button"
+          :class="{ active: activeTab === tab.id }"
+          @click="activeTab = tab.id"
         >
-          <span class="material-icons">{{ tab.icon }}</span>
+          <span class="material-icons" aria-hidden="true">{{ tab.icon }}</span>
           {{ tab.label }}
         </button>
-      </div>
+      </nav>
 
-      <Transition name="tab-fade" mode="out-in">
-        <div :key="currentTab" class="tab-content card">
-          <!-- Tab Hợp đồng -->
-          <div v-if="currentTab === 'contracts'" class="tab-pane">
-            <div class="table-header">
-              <div class="header-left">
-                <h3>Danh sách hợp đồng thuê</h3>
-                <p>Quản lý và gia hạn các hợp đồng đang diễn ra</p>
-              </div>
-              <div class="search-box">
-                <span class="material-icons">search</span>
-                <input
-                  type="text"
-                  v-model="searchQuery"
-                  placeholder="Tìm số hợp đồng, tên khách..."
-                />
-              </div>
-            </div>
-            <div class="table-responsive">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Số HĐ</th>
-                    <th>Khách hàng</th>
-                    <th>Ngày thuê</th>
-                    <th>Hạn trả</th>
-                    <th>Trạng thái</th>
-                    <th>Hành động</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="contract in filteredContracts" :key="contract.id">
-                    <td>
-                      <span class="id-tag">{{ contract.id }}</span>
-                    </td>
-                    <td>
-                      <strong>{{ contract.customer }}</strong>
-                    </td>
-                    <td class="date-cell">{{ contract.startDate }}</td>
-                    <td
-                      class="date-cell"
-                      :class="{ 'text-danger': contract.isOverdue }"
-                    >
-                      {{ contract.endDate }}
-                    </td>
-                    <td>
-                      <span :class="['badge-glass', contract.statusType]">
-                        {{ contract.statusLabel }}
-                      </span>
-                    </td>
-                    <td class="actions">
-                      <button
-                        class="btn-icon-bg"
-                        title="Gia hạn"
-                        @click="handleExtend(contract)"
-                      >
-                        <span class="material-icons">history</span>
-                      </button>
-                      <button class="btn-icon-bg info" title="Xem chi tiết">
-                        <span class="material-icons">visibility</span>
-                      </button>
-                    </td>
-                  </tr>
-                  <tr v-if="filteredContracts.length === 0">
-                    <td colspan="6" class="empty-row">
-                      Không tìm thấy kết quả phù hợp
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
+      <section class="tab-host">
+        <DataAuditTab
+          v-show="activeTab === 'data-audit'"
+          :is-active="activeTab === 'data-audit'"
+          @notify="handleNotify"
+          @kpi="updateKpi('data-audit', $event)"
+        />
 
-          <!-- Tab Hoàn trả truyện -->
-          <div v-if="currentTab === 'refunds'" class="tab-pane">
-            <div class="refund-workflow-container">
-              <div class="workflow-header text-center">
-                <h3>Kiểm định trả tại màn chuyên dụng</h3>
-                <p>
-                  Tab này đã liên kết trực tiếp tới màn mới để xử lý quét hợp
-                  đồng, quét item và kết toán đồng nhất.
-                </p>
-              </div>
+        <PromotionsTab
+          v-show="activeTab === 'promotions'"
+          :is-active="activeTab === 'promotions'"
+          @notify="handleNotify"
+          @kpi="updateKpi('promotions', $event)"
+        />
 
-              <div class="workflow-card-premium">
-                <div class="alert-info-glass">
-                  <span class="material-icons">open_in_new</span>
-                  <span
-                    >Nhấn nút bên dưới để mở màn <strong>Kiểm định trả</strong>
-                    tại đường dẫn <strong>/hoan-tra</strong>.</span
-                  >
-                </div>
+        <HrRbacTab
+          v-show="activeTab === 'hr-rbac'"
+          :is-active="activeTab === 'hr-rbac'"
+          @notify="handleNotify"
+          @kpi="updateKpi('hr-rbac', $event)"
+        />
 
-                <button class="btn-gradient" type="button" @click="openReturnScreen">
-                  <span class="material-icons">assignment_return</span>
-                  Mở màn kiểm định trả
-                </button>
-              </div>
-            </div>
-          </div>
+        <PricingTab
+          v-show="activeTab === 'pricing'"
+          :is-active="activeTab === 'pricing'"
+          @notify="handleNotify"
+          @kpi="updateKpi('pricing', $event)"
+        />
 
-          <!-- Tab Đặt lịch hẹn -->
-          <div v-if="currentTab === 'appointments'" class="tab-pane">
-            <div class="appointments-dashboard">
-              <div class="form-aside">
-                <div class="card-glass">
-                  <div class="card-title">
-                    <span class="material-icons">auto_stories</span>
-                    <h3>Tạo lịch hẹn</h3>
-                  </div>
+        <SystemTab
+          v-show="activeTab === 'system-backup'"
+          :is-active="activeTab === 'system-backup'"
+          @notify="handleNotify"
+          @kpi="updateKpi('system-backup', $event)"
+        />
+      </section>
 
-                  <div class="appointment-form-premium">
-                    <div class="field">
-                      <label>Khách hàng</label>
-                      <input
-                        v-model="newAppointment.customer"
-                        type="text"
-                        placeholder="Tên khách hàng..."
-                      />
-                    </div>
-
-                    <div class="field">
-                      <label>Chọn bộ truyện</label>
-                      <select
-                        v-model="selectedTitleId"
-                        class="select-premium"
-                        @change="selectedVolume = ''"
-                      >
-                        <option value="" disabled>-- Chọn bộ truyện --</option>
-                        <option
-                          v-for="title in bookDB"
-                          :key="title.id"
-                          :value="title.id"
-                        >
-                          {{ title.name }}
-                        </option>
-                      </select>
-                    </div>
-
-                    <div class="field-row">
-                      <div class="field flex-2">
-                        <label>Tập</label>
-                        <select
-                          v-model="selectedVolume"
-                          class="select-premium"
-                          :disabled="!selectedTitle"
-                        >
-                          <option value="" disabled>Tập</option>
-                          <option
-                            v-for="vol in selectedTitle?.volumes"
-                            :key="vol"
-                            :value="vol"
-                          >
-                            Tập {{ vol }}
-                          </option>
-                        </select>
-                      </div>
-                      <div class="field flex-3">
-                        <label>Ngày hẹn</label>
-                        <input v-model="newAppointment.date" type="date" />
-                      </div>
-                    </div>
-
-                    <div class="field">
-                      <label>Ghi chú thêm</label>
-                      <textarea
-                        v-model="newAppointment.note"
-                        placeholder="SĐT hoặc yêu cầu khác..."
-                      ></textarea>
-                    </div>
-
-                    <button
-                      class="btn-gradient"
-                      @click="addStructuredAppointment"
-                    >
-                      <span class="material-icons">event_available</span>
-                      Lưu lịch hẹn
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div class="list-main">
-                <div class="card-glass">
-                  <div class="card-header-flex">
-                    <div class="title">
-                      <h3>Danh sách chờ</h3>
-                      <span class="badge-count">{{
-                        appointments.filter((a) => a.status === "pending")
-                          .length
-                      }}</span>
-                    </div>
-                    <div class="filters">
-                      <!-- Ví dụ filter nhanh -->
-                    </div>
-                  </div>
-
-                  <div class="appointment-grid-premium">
-                    <div
-                      v-for="app in appointments"
-                      :key="app.id"
-                      :class="['appointment-tile', app.status]"
-                    >
-                      <div class="tile-header">
-                        <span class="date">{{ formatDate(app.date) }}</span>
-                        <span
-                          v-if="isOverdue(app.date) && app.status === 'pending'"
-                          class="overdue-tag"
-                          >Quá hạn</span
-                        >
-                      </div>
-                      <div class="tile-body">
-                        <h4 class="customer-name">{{ app.customer }}</h4>
-                        <div class="book-info">
-                          <span class="material-icons">book</span>
-                          {{ app.bookName }}
-                        </div>
-                        <p class="note" v-if="app.note">{{ app.note }}</p>
-                      </div>
-                      <div class="tile-footer">
-                        <div class="actions" v-if="app.status === 'pending'">
-                          <button
-                            class="btn-mini-success"
-                            @click="completeAppointment(app.id)"
-                          >
-                            <span class="material-icons">done</span>
-                          </button>
-                          <button
-                            class="btn-mini-danger"
-                            @click="deleteAppointment(app.id)"
-                          >
-                            <span class="material-icons">delete_outline</span>
-                          </button>
-                        </div>
-                        <span v-else class="done-label">Đã hoàn thành</span>
-                      </div>
-                    </div>
-                    <div
-                      v-if="appointments.length === 0"
-                      class="empty-state-lux"
-                    >
-                      <span class="material-icons">calendar_today</span>
-                      <p>Không có lịch hẹn nào</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Tab Lịch sử -->
-          <div v-if="currentTab === 'history'" class="tab-pane">
-            <div class="table-header">
-              <h3>Nhật ký giao dịch</h3>
-              <p>Theo dõi mọi thay đổi trên hệ thống</p>
-            </div>
-            <div class="table-responsive">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Thời gian</th>
-                    <th>Loại</th>
-                    <th>Mô tả chi tiết</th>
-                    <th class="text-right">Người thực hiện</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="log in transactionHistory" :key="log.id">
-                    <td class="text-muted">{{ log.time }}</td>
-                    <td>
-                      <span class="type-indicator-wrapper">
-                        <span :class="['type-dot', slugify(log.type)]"></span>
-                        {{ log.type }}
-                      </span>
-                    </td>
-                    <td>{{ log.desc }}</td>
-                    <td class="text-right">
-                      <strong>{{ log.user }}</strong>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </Transition>
+      <transition name="toast-fade">
+        <aside v-if="toast.visible" class="toast" :class="toast.type">
+          <span class="material-icons" aria-hidden="true">
+            {{ toast.type === 'success' ? 'check_circle' : 'error' }}
+          </span>
+          {{ toast.message }}
+        </aside>
+      </transition>
     </div>
   </DefaultLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, inject, ref } from "vue";
-import { useRouter } from "vue-router";
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
+import DefaultLayout from '../components/layout/defaultLayout.vue';
+import DataAuditTab from '../components/admin/tabs/DataAuditTab.vue';
+import PromotionsTab from '../components/admin/tabs/PromotionsTab.vue';
+import HrRbacTab from '../components/admin/tabs/HrRbacTab.vue';
+import PricingTab from '../components/admin/tabs/PricingTab.vue';
+import SystemTab from '../components/admin/tabs/SystemTab.vue';
+import { useAuthStore } from '../stores/auth';
 
-import DefaultLayout from "../components/layout/defaultLayout.vue";
+type TabId = 'data-audit' | 'promotions' | 'hr-rbac' | 'pricing' | 'system-backup';
 
-interface ContractSummary {
-  id: string;
-  customer: string;
-  startDate: string;
-  endDate: string;
-  statusLabel: string;
-  statusType: "success" | "warning" | "danger";
-  isOverdue: boolean;
-  expectedRefund: number;
-}
-
-interface Appointment {
-  id: number;
-  customer: string;
-  bookName: string;
-  date: string;
-  note: string;
-  status: "pending" | "completed";
-}
-
-const slugify = (text: string) => {
-  if (text.includes("Cho")) return "rental";
-  if (text.includes("Hoàn")) return "refund";
-  if (text.includes("Gia")) return "extend";
-  return "default";
+type KpiPayload = {
+  primaryLabel: string;
+  primaryValue: string;
+  secondaryLabel: string;
+  secondaryValue: string;
 };
 
 const router = useRouter();
-const currentTab = ref("contracts");
-const searchQuery = ref("");
+const authStore = useAuthStore();
 
-const addNotification = inject("addNotification") as (
-  type: string,
-  msg: string,
-) => void;
-const showConfirm = inject("showConfirm") as (
-  msg: string,
-  title?: string,
-) => Promise<boolean>;
-
-const bookDB = ref([
-  { id: 1, name: "One Piece", volumes: [100, 101, 102, 103, 104, 105] },
-  { id: 2, name: "Detective Conan", volumes: [90, 91, 98, 99, 100] },
-  { id: 3, name: "Spy x Family", volumes: [1, 2, 3, 4, 10, 11] },
-  { id: 4, name: "Jujutsu Kaisen", volumes: [0, 15, 18, 20, 22] },
-]);
-
-const selectedTitleId = ref<number | "">("");
-const selectedVolume = ref<number | "">("");
-
-const selectedTitle = computed(() =>
-  bookDB.value.find((book) => book.id === selectedTitleId.value),
-);
-
-const contracts = ref<ContractSummary[]>([
-  {
-    id: "2001",
-    customer: "Trần Thị Bình",
-    startDate: "15/04/2026",
-    endDate: "20/04/2026",
-    statusLabel: "Đang thuê",
-    statusType: "success",
-    isOverdue: false,
-    expectedRefund: 65000,
-  },
-  {
-    id: "2002",
-    customer: "Lê Minh Châu",
-    startDate: "08/04/2026",
-    endDate: "12/04/2026",
-    statusLabel: "Đã đóng",
-    statusType: "warning",
-    isOverdue: false,
-    expectedRefund: 0,
-  },
-  {
-    id: "2003",
-    customer: "Nguyễn Văn A",
-    startDate: "10/04/2026",
-    endDate: "15/04/2026",
-    statusLabel: "Quá hạn",
-    statusType: "danger",
-    isOverdue: true,
-    expectedRefund: 0,
-  },
-]);
-
-const appointments = ref<Appointment[]>([
-  {
-    id: 1,
-    customer: "Lê Văn C",
-    bookName: "One Piece - Tập 105",
-    date: "2026-04-20",
-    note: "SĐT: 0987654321",
-    status: "pending",
-  },
-  {
-    id: 2,
-    customer: "Phạm Thị D",
-    bookName: "Detective Conan - Tập 98",
-    date: "2026-04-18",
-    note: "Gọi trước 1 tiếng",
-    status: "pending",
-  },
-]);
-
-const transactionHistory = ref([
-  {
-    id: 1,
-    time: "14:30 17/04/2026",
-    type: "Cho thuê",
-    desc: "HĐ-1005: Cho thuê 3 cuốn truyện Conan",
-    user: "Admin",
-  },
-  {
-    id: 2,
-    time: "12:15 17/04/2026",
-    type: "Hoàn tiền",
-    desc: "Hoàn trả HĐ-882 (Sách lỗi)",
-    user: "Staff",
-  },
-  {
-    id: 3,
-    time: "09:00 17/04/2026",
-    type: "Gia hạn",
-    desc: "Gia hạn HĐ-990 thêm 3 ngày",
-    user: "Admin",
-  },
-]);
-
-const newAppointment = ref({
-  customer: "",
-  date: "",
-  note: "",
-});
-
-const tabs = [
-  { id: "contracts", label: "Hợp đồng", icon: "description" },
-  { id: "refunds", label: "Hoàn trả", icon: "assignment_return" },
-  { id: "appointments", label: "Đặt lịch", icon: "event_available" },
-  { id: "history", label: "Lịch sử", icon: "receipt_long" },
+const tabs: Array<{ id: TabId; label: string; icon: string }> = [
+  { id: 'data-audit', label: 'Dữ liệu & Kiểm tra', icon: 'monitoring' },
+  { id: 'promotions', label: 'Khuyến mãi', icon: 'local_offer' },
+  { id: 'hr-rbac', label: 'Nhân sự & Quyền hạn', icon: 'badge' },
+  { id: 'pricing', label: 'Bảng giá', icon: 'paid' },
+  { id: 'system-backup', label: 'Hệ thống & Sao lưu', icon: 'settings_backup_restore' },
 ];
 
-const openReturnScreen = async () => {
-  await router.push("/hoan-tra");
-};
+const activeTab = ref<TabId>('data-audit');
 
-const handleTabClick = (tabId: string) => {
-  if (tabId === "refunds") {
-    void openReturnScreen();
-    return;
-  }
-  currentTab.value = tabId;
-};
-
-const filteredContracts = computed(() => {
-  const query = searchQuery.value.toLowerCase();
-  if (!query) {
-    return contracts.value;
-  }
-  return contracts.value.filter(
-    (contract) =>
-      contract.id.toLowerCase().includes(query) ||
-      contract.customer.toLowerCase().includes(query),
-  );
+const tabKpis = reactive<Record<TabId, KpiPayload>>({
+  'data-audit': {
+    primaryLabel: 'Khách hàng',
+    primaryValue: '0',
+    secondaryLabel: 'Danh sách đen',
+    secondaryValue: '0',
+  },
+  promotions: {
+    primaryLabel: 'Mã giảm giá',
+    primaryValue: '0',
+    secondaryLabel: 'Khuyến mãi tự động',
+    secondaryValue: '0',
+  },
+  'hr-rbac': {
+    primaryLabel: 'Người dùng',
+    primaryValue: '0',
+    secondaryLabel: 'Đang hoạt động',
+    secondaryValue: '0',
+  },
+  pricing: {
+    primaryLabel: 'Phiên bản quy tắc',
+    primaryValue: '0',
+    secondaryLabel: 'hệ số thuê',
+    secondaryValue: '0',
+  },
+  'system-backup': {
+    primaryLabel: 'Cửa hàng',
+    primaryValue: 'N/A',
+    secondaryLabel: 'Trạng thái sao lưu',
+    secondaryValue: 'không xác định',
+  },
 });
 
-const addStructuredAppointment = () => {
-  if (
-    !newAppointment.value.customer ||
-    !selectedTitleId.value ||
-    !selectedVolume.value ||
-    !newAppointment.value.date
-  ) {
-    addNotification(
-      "warning",
-      "Vui lòng chọn bộ truyện, tập và nhập đầy đủ thông tin khách hàng.",
-    );
+const currentKpi = computed(() => tabKpis[activeTab.value]);
+
+const toast = reactive({
+  visible: false,
+  type: 'success' as 'success' | 'error',
+  message: '',
+  timeoutId: 0,
+});
+
+onMounted(() => {
+  enforceOwnerAccess();
+});
+
+watch(
+  () => [authStore.isAuthenticated, authStore.user?.role],
+  () => {
+    enforceOwnerAccess();
+  },
+);
+
+function enforceOwnerAccess() {
+  if (!authStore.isAuthenticated) {
+    router.replace('/login');
     return;
   }
 
-  const bookName = `${selectedTitle.value?.name} - Tập ${selectedVolume.value}`;
-  const newId = Date.now();
-
-  appointments.value.unshift({
-    id: newId,
-    customer: newAppointment.value.customer,
-    bookName,
-    date: newAppointment.value.date,
-    note: newAppointment.value.note,
-    status: "pending",
-  });
-
-  addNotification("success", `Đã tạo lịch hẹn cho bộ truyện: ${bookName}`);
-
-  newAppointment.value = { customer: "", date: "", note: "" };
-  selectedTitleId.value = "";
-  selectedVolume.value = "";
-};
-
-const handleExtend = async (contract: ContractSummary) => {
-  const ok = await showConfirm(
-    `Bạn có chắc chắn muốn gia hạn hợp đồng ${contract.id} thêm 3 ngày?`,
-    "Gia hạn hợp đồng",
-  );
-  if (ok) {
-    addNotification(
-      "success",
-      `Đã gia hạn thành công cho hợp đồng ${contract.id}`,
-    );
+  if (authStore.user?.role !== 'owner') {
+    router.replace('/');
   }
-};
+}
 
-const deleteAppointment = async (id: number) => {
-  const ok = await showConfirm("Bạn có muốn hủy lịch hẹn này?", "Hủy lịch");
-  if (ok) {
-    appointments.value = appointments.value.filter(
-      (appointment) => appointment.id !== id,
-    );
-    addNotification("success", "Đã hủy lịch hẹn.");
-  }
-};
+function updateKpi(tabId: TabId, payload: KpiPayload) {
+  tabKpis[tabId] = payload;
+}
 
-const completeAppointment = (id: number) => {
-  const appointment = appointments.value.find((entry) => entry.id === id);
-  if (appointment) {
-    appointment.status = "completed";
-  }
-};
-
-const isToday = (dateStr: string) =>
-  dateStr === new Date().toISOString().slice(0, 10);
-
-const isOverdue = (dateStr: string) =>
-  dateStr < new Date().toISOString().slice(0, 10);
-
-const formatDate = (dateStr: string) => {
-  if (!dateStr) {
-    return "";
+function handleNotify(payload: { type: 'success' | 'error'; message: string }) {
+  if (toast.timeoutId) {
+    window.clearTimeout(toast.timeoutId);
   }
 
-  const [year, month, day] = dateStr.split("-");
-  return `${day}/${month}/${year}`;
-};
+  toast.type = payload.type;
+  toast.message = payload.message;
+  toast.visible = true;
+
+  toast.timeoutId = window.setTimeout(() => {
+    toast.visible = false;
+  }, 3000);
+}
 </script>
 
 <style scoped>
-@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
+.manager-shell {
+  --shell-bg-1: #f7fbff;
+  --shell-bg-2: #fefce8;
+  --shell-line: #dbe4f0;
+  --shell-ink: #0f172a;
+  --shell-muted: #475569;
+  --shell-brand: #0f172a;
+  --shell-brand-alt: #9a3412;
 
-.management-container {
-  padding: 32px;
-  background: #fdfdfd;
-  background-image: radial-gradient(#e2e8f0 0.5px, transparent 0.5px);
-  background-size: 24px 24px;
   min-height: 100vh;
-  font-family: "Plus Jakarta Sans", sans-serif;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(59, 130, 246, 0.12), transparent 40%),
+    radial-gradient(circle at 100% 100%, rgba(234, 179, 8, 0.14), transparent 45%),
+    linear-gradient(140deg, var(--shell-bg-1) 0%, var(--shell-bg-2) 100%);
+  color: var(--shell-ink);
 }
 
-/* Header & Stats */
-.header-section {
+.manager-hero {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 32px;
-  animation: fadeInDown 0.6s ease;
-}
-.page-title {
-  font-size: 2rem;
-  font-weight: 800;
-  color: #0f172a;
-  letter-spacing: -0.04em;
-  margin: 0;
+  gap: 16px;
+  margin-bottom: 16px;
 }
 
-.quick-stats {
-  display: flex;
-  gap: 20px;
-}
-.stat-item {
-  background: white;
-  padding: 16px 24px;
-  border-radius: 20px;
-  border: 1px solid #f1f5f9;
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.02);
-  display: flex;
-  flex-direction: column;
-  min-width: 160px;
-  transition: 0.3s;
-}
-.stat-item:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.05);
-}
-.stat-item .label {
-  font-size: 0.7rem;
-  color: #94a3b8;
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 12px;
   font-weight: 700;
+  color: var(--shell-muted);
+}
+
+.manager-hero h1 {
+  margin: 8px 0;
+  font-size: clamp(1.7rem, 3vw, 2.6rem);
+  line-height: 1.1;
+}
+
+.hero-subtitle {
+  margin: 0;
+  max-width: 760px;
+  color: var(--shell-muted);
+}
+
+.owner-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  padding: 8px 14px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.kpi-card {
+  border: 1px solid var(--shell-line);
+  border-radius: 16px;
+  padding: 14px;
+  background: #ffffff;
+}
+
+.kpi-card.alt {
+  background: linear-gradient(120deg, #ffffff 0%, #fef3c7 100%);
+}
+
+.kpi-label {
+  margin: 0;
+  font-size: 12px;
+  color: var(--shell-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.stat-item .value {
-  font-size: 1.75rem;
+
+.kpi-value {
+  margin: 8px 0 0;
+  font-size: clamp(1.2rem, 2.5vw, 1.9rem);
   font-weight: 800;
-  color: #0f172a;
-  margin: 4px 0;
-}
-.stat-item .trend {
-  font-size: 0.75rem;
-  font-weight: 700;
-  color: #059669;
-  background: #f0fdf4;
-  padding: 2px 8px;
-  border-radius: 99px;
-  width: fit-content;
-}
-.stat-item.warning .value {
-  color: #ea580c;
-}
-.stat-item.info .value {
-  color: #2563eb;
 }
 
-/* Tabs Layout */
-.management-tabs {
+.tab-strip {
   display: flex;
-  gap: 12px;
-  margin-bottom: 32px;
-  padding: 6px;
-  background: #f1f5f9;
-  border-radius: 18px;
-  width: fit-content;
-  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05);
-}
-.tab-item {
-  display: flex;
-  align-items: center;
   gap: 10px;
-  padding: 12px 24px;
-  border-radius: 14px;
-  border: none;
-  background: transparent;
-  color: #64748b;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.tab-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--shell-line);
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 10px 14px;
+  font-weight: 700;
+  color: #334155;
   cursor: pointer;
-  font-weight: 700;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  font-size: 0.95rem;
-}
-.tab-item:hover {
-  color: #1e293b;
-  background: rgba(255, 255, 255, 0.5);
-}
-.tab-item.active {
-  background: white;
-  color: #2563eb;
-  box-shadow:
-    0 10px 15px -3px rgba(37, 99, 235, 0.1),
-    0 4px 6px -2px rgba(37, 99, 235, 0.05);
 }
 
-/* Content Card Glass */
-.card {
-  background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(12px);
-  padding: 40px;
-  border-radius: 32px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.05);
-}
-
-/* Table Style Premium */
-.table-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  margin-bottom: 30px;
-}
-.table-header h3 {
-  font-size: 1.5rem;
-  font-weight: 800;
-  color: #0f172a;
-  margin: 0 0 4px 0;
-}
-.table-header p {
-  color: #64748b;
-  font-size: 0.9rem;
-  margin: 0;
-}
-
-.search-box {
-  position: relative;
-  width: 360px;
-}
-.search-box .material-icons {
-  position: absolute;
-  left: 16px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #2563eb;
-  font-size: 20px;
-}
-.search-box input {
-  width: 100%;
-  padding: 14px 14px 14px 52px;
-  border: 2px solid #f1f5f9;
-  border-radius: 18px;
-  font-size: 0.95rem;
-  outline: none;
-  transition: 0.3s;
-  background: white;
-}
-.search-box input:focus {
+.tab-button.active {
   border-color: #2563eb;
-  box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.1);
+  background: #2563eb;
+  color: #ffffff;
 }
 
-.table-responsive {
-  width: 100%;
-}
-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0 12px;
-}
-th {
-  text-align: left;
-  padding: 12px 24px;
-  color: #94a3b8;
-  font-weight: 700;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-}
-td {
-  padding: 20px 24px;
-  background: white;
-  border-top: 1px solid #f1f5f9;
-  border-bottom: 1px solid #f1f5f9;
-  color: #1e293b;
-  font-size: 0.95rem;
-  transition: 0.2s;
-}
-td:first-child {
-  border-left: 1px solid #f1f5f9;
-  border-top-left-radius: 16px;
-  border-bottom-left-radius: 16px;
-}
-td:last-child {
-  border-right: 1px solid #f1f5f9;
-  border-top-right-radius: 16px;
-  border-bottom-right-radius: 16px;
-}
-tr:hover td {
-  background: #f8fafc;
-  border-color: #e2e8f0;
+.tab-host {
+  min-height: 540px;
 }
 
-.id-tag {
-  background: #f1f5f9;
-  color: #475569;
-  padding: 4px 12px;
-  border-radius: 8px;
-  font-family: monospace;
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 12px;
+  border: 1px solid #cbd5e1;
+  padding: 10px 14px;
   font-weight: 700;
+  z-index: 2050;
 }
-.badge-glass {
-  padding: 6px 14px;
-  border-radius: 10px;
-  font-size: 0.75rem;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-.badge-glass.success {
+
+.toast.success {
   background: #dcfce7;
   color: #166534;
 }
-.badge-glass.warning {
-  background: #fef3c7;
-  color: #92400e;
-}
-.badge-glass.danger {
+
+.toast.error {
   background: #fee2e2;
   color: #991b1b;
 }
 
-.btn-icon-bg {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  border: none;
-  background: #f1f5f9;
-  color: #64748b;
-  cursor: pointer;
-  transition: 0.3s;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-right: 8px;
-}
-.btn-icon-bg:hover {
-  background: #2563eb;
-  color: white;
-  transform: rotate(15deg);
-}
-.btn-icon-bg.info:hover {
-  background: #0f172a;
+.toast-fade-enter-active,
+.toast-fade-leave-active {
+  transition: opacity 0.2s ease;
 }
 
-/* Refund Section Premium */
-.refund-workflow-container {
-  max-width: 800px;
-  margin: 0 auto;
-}
-.workflow-header h3 {
-  font-size: 2rem;
-  font-weight: 900;
-  color: #0f172a;
-}
-.workflow-card-premium {
-  background: white;
-  border-radius: 40px;
-  padding: 48px;
-  box-shadow: 0 40px 100px -20px rgba(0, 0, 0, 0.08);
-  border: 1px solid #f1f5f9;
-  margin-top: 32px;
+.toast-fade-enter-from,
+.toast-fade-leave-to {
+  opacity: 0;
 }
 
-.alert-info-glass {
-  background: #eff6ff;
-  color: #1e40af;
-  padding: 16px 24px;
-  border-radius: 20px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 32px;
-  font-size: 0.95rem;
-}
-
-.hotkey-legend {
-  margin: -8px 0 20px 0;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 10px 14px;
-  color: #475569;
-  font-size: 0.82rem;
-}
-
-.hotkey-legend kbd {
-  padding: 2px 6px;
-  border-radius: 6px;
-  border: 1px solid #cbd5e1;
-  background: white;
-  font-family: inherit;
-  font-weight: 700;
-  color: #1e293b;
-}
-
-.mega-search {
-  position: relative;
-  display: flex;
-  gap: 12px;
-  margin-top: 12px;
-}
-.mega-search.scan-highlight {
-  border-radius: 24px;
-  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.25);
-}
-.mega-search input {
-  flex: 1;
-  padding: 20px 20px 20px 60px;
-  border: 2px solid #f1f5f9;
-  border-radius: 24px;
-  font-size: 1.1rem;
-  outline: none;
-  transition: 0.3s;
-  font-weight: 600;
-}
-.mega-search input:focus {
-  border-color: #2563eb;
-  background: #f8fafc;
-}
-.mega-search .material-icons {
-  position: absolute;
-  left: 24px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 28px;
-  color: #2563eb;
-}
-.btn-action-primary {
-  padding: 0 32px;
-  background: #2563eb;
-  color: white;
-  border: none;
-  border-radius: 20px;
-  font-weight: 800;
-  cursor: pointer;
-  transition: 0.3s;
-}
-.btn-action-primary:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-.focused-preview-card {
-  margin-top: 40px;
-  background: #fafafa;
-  border-radius: 28px;
-  padding: 32px;
-  border: 2px solid #2563eb;
-  border-style: dashed;
-}
-.preview-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #059669;
-  font-weight: 800;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  margin-bottom: 24px;
-}
-.dot-active {
-  width: 8px;
-  height: 8px;
-  background: #059669;
-  border-radius: 50%;
-  animation: pulse 2s infinite;
-}
-
-.customer-preview {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-.customer-preview .avatar {
-  width: 64px;
-  height: 64px;
-  background: #2563eb;
-  color: white;
-  border-radius: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.5rem;
-  font-weight: 900;
-}
-.customer-preview h4 {
-  margin: 0;
-  font-size: 1.25rem;
-  font-weight: 800;
-  color: #0f172a;
-}
-
-.money-preview {
-  text-align: right;
-  border-left: 1px solid #e2e8f0;
-  padding-left: 32px;
-  flex: 1;
-}
-.money-preview .label {
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: #64748b;
-}
-.money-preview .amount {
-  display: block;
-  font-size: 2.25rem;
-  font-weight: 900;
-  color: #059669;
-}
-
-.btn-confirm-refund {
-  width: 100%;
-  margin-top: 32px;
-  padding: 20px;
-  background: #059669;
-  color: white;
-  border: none;
-  border-radius: 20px;
-  font-weight: 800;
-  font-size: 1.1rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  cursor: pointer;
-  transition: 0.3s;
-}
-.btn-confirm-refund:hover {
-  background: #047857;
-  transform: translateY(-4px);
-  box-shadow: 0 20px 25px -5px rgba(5, 150, 105, 0.4);
-}
-.btn-confirm-refund:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
-}
-
-/* Appointment Dashboard Lux */
-.appointments-dashboard {
-  display: grid;
-  grid-template-columns: 380px 1fr;
-  gap: 32px;
-}
-.card-glass {
-  background: white;
-  border-radius: 28px;
-  padding: 32px;
-  border: 1px solid #f1f5f9;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.03);
-  height: 100%;
-}
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 32px;
-}
-.card-title .material-icons {
-  color: #2563eb;
-  font-size: 32px;
-}
-.card-title h3 {
-  margin: 0;
-  font-weight: 800;
-  color: #0f172a;
-}
-
-.appointment-form-premium {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-.field label {
-  display: block;
-  font-size: 0.8rem;
-  font-weight: 800;
-  color: #475569;
-  margin-bottom: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.field input,
-.field textarea,
-.select-premium {
-  width: 100%;
-  padding: 14px 18px;
-  border: 2px solid #f1f5f9;
-  border-radius: 16px;
-  outline: none;
-  transition: 0.3s;
-  font-family: inherit;
-  font-weight: 600;
-}
-.field textarea {
-  height: 100px;
-  resize: none;
-}
-.select-premium {
-  appearance: none;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%232563eb' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")
-    no-repeat right 16px center;
-  background-size: 20px;
-  background-color: white;
-}
-.field input:focus,
-.select-premium:focus {
-  border-color: #2563eb;
-  background: #f8fafc;
-}
-
-.btn-gradient {
-  padding: 18px;
-  background: linear-gradient(135deg, #2563eb, #7c3aed);
-  color: white;
-  border: none;
-  border-radius: 18px;
-  font-weight: 800;
-  font-size: 1rem;
-  cursor: pointer;
-  transition: 0.3s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-}
-.btn-gradient:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 15px 20px -5px rgba(124, 58, 237, 0.3);
-}
-
-/* Appointment Grid lux */
-.appointment-grid-premium {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 20px;
-}
-.appointment-tile {
-  background: #fdfdfd;
-  padding: 24px;
-  border-radius: 24px;
-  border: 1px solid #f1f5f9;
-  transition: 0.3s;
-  position: relative;
-}
-.appointment-tile:hover {
-  background: white;
-  border-color: #2563eb;
-  transform: scale(1.02);
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05);
-}
-
-.tile-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-.tile-header .date {
-  font-size: 0.8rem;
-  font-weight: 800;
-  color: #94a3b8;
-}
-.overdue-tag {
-  background: #fee2e2;
-  color: #ef4444;
-  padding: 4px 10px;
-  border-radius: 8px;
-  font-size: 0.7rem;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.customer-name {
-  margin: 0 0 10px 0;
-  font-size: 1.15rem;
-  font-weight: 800;
-  color: #0f172a;
-}
-.book-info {
-  background: #eff6ff;
-  color: #2563eb;
-  padding: 8px 14px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.85rem;
-  font-weight: 700;
-}
-.book-info .material-icons {
-  font-size: 18px;
-}
-
-.tile-footer {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid #f1f5f9;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.btn-mini-success {
-  background: #dcfce7;
-  color: #059669;
-  border: none;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  cursor: pointer;
-  transition: 0.2s;
-}
-.btn-mini-danger {
-  background: #fee2e2;
-  color: #ef4444;
-  border: none;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  cursor: pointer;
-  transition: 0.2s;
-}
-.btn-mini-success:hover {
-  background: #059669;
-  color: white;
-}
-.btn-mini-danger:hover {
-  background: #ef4444;
-  color: white;
-}
-
-.appointment-tile.completed {
-  opacity: 0.6;
-  background: #f8fafc;
-}
-.done-label {
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: #059669;
-  font-style: italic;
-}
-
-/* History Styles */
-.type-indicator-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 700;
-  color: #475569;
-}
-.type-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  opacity: 0.8;
-}
-.type-dot.rental {
-  background: #2563eb;
-  box-shadow: 0 0 10px rgba(37, 99, 235, 0.4);
-}
-.type-dot.refund {
-  background: #ea580c;
-  box-shadow: 0 0 10px rgba(234, 88, 12, 0.4);
-}
-.type-dot.extend {
-  background: #059669;
-  box-shadow: 0 0 10px rgba(5, 150, 105, 0.4);
-}
-.type-dot.default {
-  background: #94a3b8;
-}
-
-/* Transitions */
-.tab-fade-enter-active {
-  animation: fadeIn 0.4s ease;
-}
-.tab-fade-leave-active {
-  animation: fadeOut 0.3s ease;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
+@media (max-width: 900px) {
+  .manager-shell {
+    padding: 16px;
   }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-@keyframes fadeOut {
-  from {
-    opacity: 1;
-    transform: translateY(0);
-  }
-  to {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-}
-@keyframes pulse {
-  0% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.5;
-    transform: scale(1.5);
-  }
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-@keyframes fadeInDown {
-  from {
-    opacity: 0;
-    transform: translateY(-20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
 
-/* Responsive */
-@media (max-width: 1200px) {
-  .appointments-dashboard {
+  .manager-hero {
+    flex-direction: column;
+  }
+
+  .kpi-strip {
     grid-template-columns: 1fr;
   }
-  .header-section {
-    flex-direction: column;
-    gap: 20px;
-    align-items: flex-start;
+
+  .tab-strip {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 4px;
+  }
+
+  .tab-button {
+    white-space: nowrap;
   }
 }
 </style>

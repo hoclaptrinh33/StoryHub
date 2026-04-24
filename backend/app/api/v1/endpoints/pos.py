@@ -626,7 +626,7 @@ async def refund_pos_order(
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
 ) -> ResponseEnvelope[RefundPosOrderPayload] | dict[str, object]:
-    auth.require_role("manager")
+    auth.require_role("manager", "owner")
     auth.require_scope("pos:refund")
 
     cached = await get_cached_response(

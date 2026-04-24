@@ -291,6 +291,24 @@ class AuditLog(Base):
 
     actor = relationship("User", foreign_keys=[actor_user_id])
 
+class InventoryLog(Base):
+    __tablename__ = 'inventory_log'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(50), nullable=False)
+    action_type = Column(String(50), nullable=False) # STOCK_IN, STOCK_OUT, ADJUST, CONVERT, PRICE_CHANGE
+    target_type = Column(String(50), nullable=False) # VOLUME, ITEM
+    target_id = Column(String(50), nullable=False)
+    title_name = Column(String(255), nullable=True)
+    sub_text = Column(String(255), nullable=True)
+    change_qty = Column(Integer, default=0)
+    old_qty = Column(Integer, nullable=True)
+    new_qty = Column(Integer, nullable=True)
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", foreign_keys=[user_id])
+
 # ==========================================
 # 6. AUTH & USER DOMAIN
 # ==========================================

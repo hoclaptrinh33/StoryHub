@@ -8,117 +8,177 @@
         </div>
       </header>
 
-      <section class="actions-bar">
-        <input
-          ref="searchInputRef"
-          v-model="searchQuery"
-          type="text"
-          placeholder="Tìm bằng ISBN hoặc tên truyện..."
-          class="search-input"
-        />
-        <div class="action-buttons">
-          <button class="btn-primary" @click="openCreateModal('new')">
-            <span class="material-icons">library_add</span>
-            Nhập sách mới
-          </button>
-          <button class="btn-secondary" @click="openCreateModal('restock')">
-            <span class="material-icons">add_box</span>
-            Bổ sung tồn kho
-          </button>
-        </div>
-      </section>
-
-      <section class="inventory-filter-bar">
-        <div class="filter-group">
-          <span class="filter-group-title">Loại hàng</span>
-          <button
-            type="button"
-            :class="['filter-btn', { active: inventoryTypeFilter === 'all' }]"
-            @click="inventoryTypeFilter = 'all'"
-          >
-            Tất cả hàng
-          </button>
-          <button
-            type="button"
-            :class="['filter-btn', { active: inventoryTypeFilter === 'rental' }]"
-            @click="inventoryTypeFilter = 'rental'"
-          >
-            Chỉ hàng thuê
-          </button>
-          <button
-            type="button"
-            :class="['filter-btn', { active: inventoryTypeFilter === 'retail' }]"
-            @click="inventoryTypeFilter = 'retail'"
-          >
-            Chỉ hàng bán
-          </button>
-        </div>
-
-        <div class="filter-group">
-          <span class="filter-group-title">Trạng thái</span>
-          <button
-            v-for="option in inventoryStatusFilterOptions"
-            :key="option.value"
-            type="button"
-            :class="['filter-btn', 'compact', { active: inventoryStatusFilter === option.value }]"
-            @click="inventoryStatusFilter = option.value"
-          >
-            {{ option.label }}
-          </button>
-        </div>
-      </section>
-
-      <div v-if="isLoading" class="screen-loading-state">
-        <span class="material-icons spin">autorenew</span>
-        Đang nạp dữ liệu kho...
+      <div class="view-tabs">
+        <button
+          type="button"
+          :class="['tab-item', { active: activeTab === 'items' }]"
+          @click="activeTab = 'items'"
+        >
+          <span class="material-icons">inventory_2</span>
+          Danh mục kho
+        </button>
+        <button
+          type="button"
+          :class="['tab-item', { active: activeTab === 'history' }]"
+          @click="activeTab = 'history'"
+        >
+          <span class="material-icons">history</span>
+          Lịch sử cập nhật
+        </button>
       </div>
 
-      <div v-else class="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>Mã ISBN / SKU</th>
-              <th>Tên Sách</th>
-              <th>Loại Hàng</th>
-              <th>Giá hiện tại</th>
-              <th>Tồn Kho</th>
-              <th>Trạng thái</th>
-              <th class="text-center">Hành động</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="item in filteredItems" :key="item.id">
-              <td class="code-text">{{ item.code }}</td>
-              <td class="font-medium">{{ item.name }}</td>
-              <td>
-                <span :class="item.type === 'retail' ? 'tag-sale' : 'tag-rent'">
-                  {{ item.type === "retail" ? "Sách mới (Bán)" : "Sách thuê (SKU)" }}
+      <template v-if="activeTab === 'items'">
+        <section class="actions-bar">
+          <input
+            ref="searchInputRef"
+            v-model="searchQuery"
+            type="text"
+            placeholder="Tìm bằng ISBN hoặc tên truyện..."
+            class="search-input"
+          />
+          <div class="action-buttons">
+            <button class="btn-primary" @click="openCreateModal('new')">
+              <span class="material-icons">library_add</span>
+              Nhập sách mới
+            </button>
+            <button class="btn-secondary" @click="openCreateModal('restock')">
+              <span class="material-icons">add_box</span>
+              Bổ sung tồn kho
+            </button>
+          </div>
+        </section>
+
+        <section class="inventory-filter-bar">
+          <div class="filter-group">
+            <span class="filter-group-title">Loại hàng</span>
+            <button
+              type="button"
+              :class="['filter-btn', { active: inventoryTypeFilter === 'all' }]"
+              @click="inventoryTypeFilter = 'all'"
+            >
+              Tất cả hàng
+            </button>
+            <button
+              type="button"
+              :class="['filter-btn', { active: inventoryTypeFilter === 'rental' }]"
+              @click="inventoryTypeFilter = 'rental'"
+            >
+              Chỉ hàng thuê
+            </button>
+            <button
+              type="button"
+              :class="['filter-btn', { active: inventoryTypeFilter === 'retail' }]"
+              @click="inventoryTypeFilter = 'retail'"
+            >
+              Chỉ hàng bán
+            </button>
+          </div>
+
+          <div class="filter-group">
+            <span class="filter-group-title">Trạng thái</span>
+            <button
+              v-for="option in inventoryStatusFilterOptions"
+              :key="option.value"
+              type="button"
+              :class="['filter-btn', 'compact', { active: inventoryStatusFilter === option.value }]"
+              @click="inventoryStatusFilter = option.value"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </section>
+
+        <div v-if="isLoading" class="screen-loading-state">
+          <span class="material-icons spin">autorenew</span>
+          Đang nạp dữ liệu kho...
+        </div>
+
+        <div v-else class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Mã ISBN / SKU</th>
+                <th>Tên Sách</th>
+                <th>Loại Hàng</th>
+                <th>Giá hiện tại</th>
+                <th>Tồn Kho</th>
+                <th>Trạng thái</th>
+                <th class="text-center">Hành động</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in filteredItems" :key="item.id">
+                <td class="code-text">{{ item.code }}</td>
+                <td class="font-medium">{{ item.name }}</td>
+                <td>
+                  <span :class="item.type === 'retail' ? 'tag-sale' : 'tag-rent'">
+                    {{ item.type === "retail" ? "Sách mới (Bán)" : "Sách thuê (SKU)" }}
+                  </span>
+                </td>
+                <td class="price-text">{{ formatCurrency(item.price) }}</td>
+                <td class="stock-qty-text">{{ formatStockQuantity(item) }}</td>
+                <td>
+                  <span :class="item.type === 'retail' ? 'stock-badge' : 'status-badge'">{{
+                    formatInventoryStatus(item.status)
+                  }}</span>
+                </td>
+                <td class="text-center">
+                  <div v-if="item.type === 'retail'" class="row-actions">
+                    <button class="btn-inline btn-price" @click="openPriceModal(item)">
+                      <span class="material-icons">edit_note</span>
+                      Cập nhật giá
+                    </button>
+                    <button
+                      class="btn-inline"
+                      :disabled="resolveRetailStock(item) < 1"
+                      @click="openConvertModal(item)"
+                    >
+                      <span class="material-icons">sync_alt</span>
+                      Chuyển ra Thuê
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              <tr v-if="filteredItems.length === 0">
+                <td colspan="7" class="empty-state">Không tìm thấy sách phù hợp.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
+      <template v-else-if="activeTab === 'history'">
+        <div v-if="isLogsLoading" class="screen-loading-state">
+          <span class="material-icons spin">autorenew</span>
+          Đang nạp lịch sử nạp sách...
+        </div>
+        <div v-else class="logs-container">
+          <div v-for="log in logs" :key="log.id" class="log-card">
+            <div class="log-icon" :class="log.action_type.toLowerCase()">
+              <span class="material-icons">{{ getLogIcon(log.action_type) }}</span>
+            </div>
+            <div class="log-content">
+              <div class="log-header">
+                <span class="log-user">{{ log.username || "Hệ thống" }}</span>
+                <span class="log-time">{{ formatDateTime(log.created_at) }}</span>
+              </div>
+              <div class="log-message">
+                <span class="log-action">{{ formatActionType(log.action_type) }}</span>
+                <span class="log-target"> {{ log.title_name }} {{ log.sub_text }}</span>
+                <p v-if="log.note" class="log-note">{{ log.note }}</p>
+              </div>
+              <div v-if="log.change_qty !== 0" class="log-delta">
+                Biến động:
+                <span :class="log.change_qty > 1 ? 'plus' : 'minus'">
+                  {{ log.change_qty > 0 ? "+" : "" }}{{ log.change_qty }}
                 </span>
-              </td>
-              <td class="price-text">{{ formatCurrency(item.price) }}</td>
-              <td class="stock-qty-text">{{ formatStockQuantity(item) }}</td>
-              <td>
-                <span :class="item.type === 'retail' ? 'stock-badge' : 'status-badge'">{{ formatInventoryStatus(item.status) }}</span>
-              </td>
-              <td class="text-center">
-                <div v-if="item.type === 'retail'" class="row-actions">
-                  <button class="btn-inline btn-price" @click="openPriceModal(item)">
-                    <span class="material-icons">edit_note</span>
-                    Cập nhật giá
-                  </button>
-                  <button class="btn-inline" :disabled="resolveRetailStock(item) < 1" @click="openConvertModal(item)">
-                    <span class="material-icons">sync_alt</span>
-                    Chuyển ra Thuê
-                  </button>
-                </div>
-              </td>
-            </tr>
-            <tr v-if="filteredItems.length === 0">
-              <td colspan="7" class="empty-state">Không tìm thấy sách phù hợp.</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+                (Tồn kho: {{ log.old_qty }} → {{ log.new_qty }})
+              </div>
+            </div>
+          </div>
+          <div v-if="logs.length === 0" class="empty-state">Chưa có lịch sử cập nhật nào.</div>
+        </div>
+      </template>
 
       <BaseModal
         :is-open="isCreateModalOpen"
@@ -434,8 +494,32 @@ import {
   importCoverImage,
   updateVolumePrice,
   buildRequestId,
+  fetchInventoryLogs,
   type InventoryItemListItem,
+  type InventoryLogItem,
 } from "../services/storyhubApi";
+
+const activeTab = ref<"items" | "history">("items");
+const logs = ref<InventoryLogItem[]>([]);
+const isLogsLoading = ref(false);
+
+const loadLogs = async () => {
+  isLogsLoading.value = true;
+  try {
+    const data = await fetchInventoryLogs();
+    logs.value = data;
+  } catch (error: any) {
+    addNotification("error", error.message || "Không thể nạp lịch sử kho.");
+  } finally {
+    isLogsLoading.value = false;
+  }
+};
+
+watch(activeTab, (newTab) => {
+  if (newTab === "history") {
+    loadLogs();
+  }
+});
 
 type IntakeMode = "new" | "restock";
 type InventoryTypeFilter = "all" | "rental" | "retail";
@@ -450,6 +534,42 @@ type InventoryStatusFilter =
   | "damaged"
   | "maintenance"
   | "unready";
+
+const formatDateTime = (dateStr: string) => {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  return d.toLocaleString("vi-VN");
+};
+
+const getLogIcon = (actionType: string) => {
+  switch (actionType) {
+    case "STOCK_IN":
+      return "add_circle";
+    case "CONVERT":
+      return "sync_alt";
+    case "PRICE_CHANGE":
+      return "sell";
+    case "ADJUST":
+      return "tune";
+    default:
+      return "history";
+  }
+};
+
+const formatActionType = (actionType: string) => {
+  switch (actionType) {
+    case "STOCK_IN":
+      return "Đã nhập thêm";
+    case "CONVERT":
+      return "Đã chuyển loại";
+    case "PRICE_CHANGE":
+      return "Đã đổi giá";
+    case "ADJUST":
+      return "Đã điều chỉnh";
+    default:
+      return actionType;
+  }
+};
 
 interface HotkeyEventDetail {
   name?: "f1" | "f2" | "f3" | "escape";
@@ -524,6 +644,10 @@ const hotkeyItems: HotkeyItem[] = [
 
 const normalizeToken = (value: string) => value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 const normalizeIsbn = (value: string) => value.replace(/[^0-9Xx]/g, "").toUpperCase();
+const isInternalSkuCode = (value: string) => {
+  const upper = value.trim().toUpperCase();
+  return upper.startsWith("RNT-") || upper.startsWith("RTN-") || upper.startsWith("ITM-");
+};
 const parseCategoriesInput = (value: string) => {
   return value
     .split(",")
@@ -1310,6 +1434,11 @@ onMounted(async () => {
       }
 
       const scanned = scannerStore.lastScannedCode;
+      if (isInternalSkuCode(scanned)) {
+        scannerStore.lastScannedCode = "";
+        return;
+      }
+
       openCreateModal("new", scanned);
       addNotification("info", "Mã chưa có trong kho. Mời nhập thông tin đầu sách mới.");
       scannerStore.lastScannedCode = "";
@@ -1910,4 +2039,149 @@ td {
     grid-template-columns: 1fr;
   }
 }
+
+/* Tabs & Logs Styles */
+.view-tabs {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 2px;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.2s;
+}
+
+.tab-item:hover {
+  color: #2563eb;
+}
+
+.tab-item.active {
+  color: #2563eb;
+}
+
+.tab-item.active::after {
+  content: "";
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: #2563eb;
+  border-radius: 999px;
+}
+
+.logs-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(100vh - 280px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.log-card {
+  display: flex;
+  gap: 16px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.log-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+.log-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.log-icon.stock_in { background: #ecfdf5; color: #10b981; }
+.log-icon.convert { background: #eff6ff; color: #3b82f6; }
+.log-icon.price_change { background: #fff7ed; color: #f97316; }
+.log-icon.adjust { background: #fef2f2; color: #ef4444; }
+.log-icon.default { background: #f8fafc; color: #64748b; }
+
+.log-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.log-user {
+  font-weight: 800;
+  color: #1e293b;
+  font-size: 0.9rem;
+}
+
+.log-time {
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.log-message {
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.log-action {
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.log-target {
+  color: #475569;
+}
+
+.log-note {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+  color: #64748b;
+  font-style: italic;
+  background: #f8fafc;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+.log-delta {
+  margin-top: 6px;
+  font-size: 0.85rem;
+  color: #475569;
+  font-weight: 600;
+  background: #f1f5f9;
+  padding: 4px 10px;
+  border-radius: 6px;
+  align-self: flex-start;
+}
+
+.log-delta .plus { color: #10b981; }
+.log-delta .minus { color: #ef4444; }
 </style>

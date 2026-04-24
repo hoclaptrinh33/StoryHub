@@ -1,4 +1,5 @@
 from app.services.audit import write_audit_log
+from app.services.inventory_log import write_inventory_log
 from app.services.cover_storage import (
     ensure_storage_tree,
     is_remote_image_url,
@@ -26,6 +27,7 @@ __all__ = [
     "get_cached_response",
     "store_cached_response",
     "write_audit_log",
+    "write_inventory_log",
     "PriceRuleSnapshot",
     "compute_sell_price",
     "compute_rent_price",

@@ -19,6 +19,7 @@ const routes = [
         path: '/quan-ly',
         name: 'Manager_title',
         component: () => import('../views/manager.vue'),
+        meta: { requiresOwner: true },
     },
     {
         path: '/ban-hang',
@@ -38,7 +39,7 @@ const routes = [
     {
         path: '/kho',
         name: 'Inventory',
-        component: () => import('../views/manager_title.vue'),
+        component: () => import('../views/inventory.vue'),
     },
     {
         path: '/khach-hang',
@@ -71,19 +72,26 @@ router.beforeEach((to, _from, next) => {
     const authStore = useAuthStore()
 
     if (to.meta.public) {
-        // If logged in and trying to go to login, redirect to dashboard
         if (to.name === 'Login' && authStore.isAuthenticated) {
             next({ name: 'Dashboard' })
-        } else {
-            next()
+            return
         }
-    } else {
-        if (!authStore.isAuthenticated) {
-            next({ name: 'Login' })
-        } else {
-            next()
-        }
+
+        next()
+        return
     }
+
+    if (!authStore.isAuthenticated) {
+        next({ name: 'Login' })
+        return
+    }
+
+    if (to.meta.requiresOwner && authStore.user?.role !== 'owner') {
+        next({ name: 'Dashboard' })
+        return
+    }
+
+    next()
 })
 
 export default router

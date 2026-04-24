@@ -43,27 +43,26 @@ def _build_default_rule() -> PriceRuleSnapshot:
 
 def _validate_rule_sanity(rule: PriceRuleSnapshot) -> None:
     issues: list[dict[str, object]] = []
-    if not 0.05 <= rule.k_rent <= 0.95:
-        issues.append({"field": "k_rent", "value": rule.k_rent})
+    if not 0.01 <= rule.k_rent <= 0.95:
+        issues.append({"field": "k_rent", "value": rule.k_rent, "message": "He so thue phai tu 0.01 den 0.95"})
     if not 0.1 <= rule.k_deposit <= 3.0:
-        issues.append({"field": "k_deposit", "value": rule.k_deposit})
+        issues.append({"field": "k_deposit", "value": rule.k_deposit, "message": "He so coc phai tu 0.1 den 3.0"})
     if rule.k_deposit < rule.k_rent:
         issues.append(
             {
                 "field": "k_deposit",
                 "value": rule.k_deposit,
-                "expected": ">= k_rent",
-                "k_rent": rule.k_rent,
+                "message": f"He so coc ({rule.k_deposit}) phai lon hon hoac bang he so thue ({rule.k_rent})",
             }
         )
     if not 1000 <= rule.d_floor <= 5_000_000:
-        issues.append({"field": "d_floor", "value": rule.d_floor})
+        issues.append({"field": "d_floor", "value": rule.d_floor, "message": "Tien coc san phai tu 1.000 den 5.000.000"})
     if not 0.2 <= rule.used_demand_factor <= 2.0:
         issues.append(
-            {"field": "used_demand_factor", "value": rule.used_demand_factor}
+            {"field": "used_demand_factor", "value": rule.used_demand_factor, "message": "He so nhu cau phai tu 0.2 den 2.0"}
         )
     if not 0.2 <= rule.used_cap_ratio <= 1.0:
-        issues.append({"field": "used_cap_ratio", "value": rule.used_cap_ratio})
+        issues.append({"field": "used_cap_ratio", "value": rule.used_cap_ratio, "message": "Ti le tran gia phai tu 0.2 den 1.0"})
 
     if issues:
         raise AppError(
@@ -141,13 +140,16 @@ def compute_sell_price(
 
 def compute_rent_price(
     *,
-    condition_level: int,
+    condition_level: int = 100,
     p_sell_new: int = _DEFAULT_P_SELL_NEW,
     k_rent: float = _DEFAULT_K_RENT,
 ) -> int:
-    bounded_condition = max(20, min(condition_level, 100))
-    quality_factor = bounded_condition / 100.0
-    calculated = int(round(p_sell_new * k_rent * quality_factor))
+    """
+    Tính giá thuê cố định dựa trên giá bìa và hệ số k_rent.
+    Loại bỏ yếu tố chất lượng (condition_level) theo yêu cầu để đảm bảo giá thuê 
+    nhất quán cho mọi khách hàng.
+    """
+    calculated = int(round(p_sell_new * k_rent))
     return max(calculated, 2000)
 
 

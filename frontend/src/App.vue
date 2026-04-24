@@ -19,11 +19,11 @@ const scannerStore = useScannerStore()
 const noticeRef = ref(null)
 const confirmRef = ref(null)
 
-const SCAN_BUFFER_TIMEOUT_MS = 200
-const SCAN_MAX_KEY_INTERVAL_MS = 60
+const SCAN_BUFFER_TIMEOUT_MS = 500
+const SCAN_MAX_KEY_INTERVAL_MS = 100
 const SCAN_MIN_LENGTH = 4
-const SCAN_RELAXED_MAX_KEY_INTERVAL_MS = 180
-const SCAN_RELAXED_MIN_LENGTH = 8
+const SCAN_RELAXED_MAX_KEY_INTERVAL_MS = 250
+const SCAN_RELAXED_MIN_LENGTH = 7
 
 let scanBuffer = ''
 let scanTimestamps = []
@@ -70,10 +70,16 @@ const isCheckoutLocalInputTarget = (target) => {
   }
 
   // These inputs have their own local Enter handling in checkout view.
-  return target.id === 'manual-code-input' || target.id === 'customer-smart-input'
+  return (
+    target.id === 'manual-code-input' ||
+    target.id === 'customer-name-input' ||
+    target.id === 'customer-phone-input' ||
+    target.id === 'customer-address-input'
+  )
 }
 
 const emitScannerEvent = (code) => {
+  console.log('[APP] emitScannerEvent:', code);
   // Global smart processing
   scannerStore.processGlobalScan(code)
   
@@ -139,6 +145,7 @@ const isRelaxedScannerPattern = () => {
 }
 
 const flushScannerBuffer = ({ allowRelaxed = false } = {}) => {
+  console.log('[APP] flushScannerBuffer called, buffer:', JSON.stringify(scanBuffer), 'length:', scanBuffer.length, 'timestamps:', scanTimestamps.length);
   if (!scanBuffer) {
     clearScannerBuffer()
     return false
@@ -147,9 +154,11 @@ const flushScannerBuffer = ({ allowRelaxed = false } = {}) => {
   const code = scanBuffer.trim()
   const validScannerInput =
     isScannerPattern() || (allowRelaxed && isRelaxedScannerPattern())
+  console.log('[APP] isScannerPattern:', isScannerPattern(), 'isRelaxedScannerPattern:', allowRelaxed ? isRelaxedScannerPattern() : 'N/A', 'validScannerInput:', validScannerInput);
   clearScannerBuffer()
 
   if (!validScannerInput || code.length < SCAN_MIN_LENGTH) {
+    console.log('[APP] REJECTED: not valid scanner input or too short');
     return false
   }
 
@@ -233,12 +242,12 @@ const handleGlobalKeydown = (event) => {
   }
 
   if (key === '1' || key === '2' || key === '3' || key === '4') {
-    if (scannerSessionActive || scanBuffer.length > 0) {
+    if (scannerSessionActive || scanBuffer.length > 0 || !isEditableTarget(event.target)) {
       appendScannerKey(key)
       return
     }
 
-    if (!isEditableTarget(event.target) && !hasBlockingModal()) {
+    if (!hasBlockingModal()) {
       event.preventDefault()
       emitHotkeyEvent(`digit-${key}`)
     }

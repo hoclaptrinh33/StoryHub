@@ -274,7 +274,15 @@
                       {{ item.type === "retail" ? "Mua" : "Thuê" }}
                     </span>
                   </td>
-                  <td>{{ formatCurrency(item.price) }}</td>
+                  <td>
+                    {{
+                      formatCurrency(
+                        item.type === "retail"
+                          ? item.price
+                          : resolveRentPrice(item.price, rentalDays),
+                      )
+                    }}
+                  </td>
                   <td>
                     <button class="btn-delete" @click.stop="removeCartItemAt(index)">
                       <span class="material-icons">delete_sweep</span>
@@ -558,6 +566,7 @@ import {
   type PosSplitPaymentMethod,
 } from "../services/storyhubApi";
 import type { ItemStatusChangedEvent } from "../types/realtime";
+import { useCheckoutPersistence } from "../composables/useCheckoutPersistence";
 import { playScanAudio } from "../utils/scanAudio";
 import { toUiErrorMessage } from "../utils/backendErrorMessages";
 
@@ -639,6 +648,19 @@ const lastRentalContractId = ref("");
 const realtimeConflictCodes = ref<string[]>([]);
 const lastScannedCode = computed(() => scannerStore.lastScannedCode);
 
+const { loadDraft, clearDraft } = useCheckoutPersistence({
+  cart,
+  customerNameInput,
+  customerPhoneInput,
+  customerAddressInput,
+  selectedCustomerId,
+  rentalDays,
+  paymentMethod,
+  isSplitPayment,
+  cashAmount,
+  transferAmount,
+});
+
 const checkoutMode = computed<CheckoutMode>(() => {
   const rawMode = String(route.query.mode ?? "").toLowerCase();
   if (rawMode === "retail" || rawMode === "rental") {
@@ -683,9 +705,33 @@ const hotkeyItems: HotkeyItem[] = [
   { key: "Delete", label: "Xóa dòng chọn" },
 ];
 
-const computeDeposit = (rentPrice: number) => Math.max(rentPrice * 4, 10000);
+const K_RENT_DAILY = 0.02;
+const K_DEPOSIT = 0.8;
+const D_FLOOR = 1000;
 
-const normalizeLookup = (value: string) => value.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+const resolveRentPrice = (sellPrice: number, days: number) => {
+  return Math.max(Math.round(sellPrice * K_RENT_DAILY * days), 2000);
+};
+
+const resolveDepositAmount = (sellPrice: number) => {
+  return Math.max(Math.round(sellPrice * K_DEPOSIT), D_FLOOR);
+};
+
+const canonicalizeRentalSku = (value: string) => {
+  const compact = value.trim().replace(/\s+/g, "");
+  if (!compact) {
+    return "";
+  }
+
+  if (compact.toUpperCase().startsWith("RTN-")) {
+    return `RNT-${compact.slice(4)}`;
+  }
+
+  return compact;
+};
+
+const normalizeLookup = (value: string) =>
+  canonicalizeRentalSku(value).replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 const normalizePhone = (value: string) => value.replace(/\D/g, "");
 
 const visibleProducts = computed(() => {
@@ -719,7 +765,7 @@ const nameMatches = computed(() => {
 // Match theo số điện thoại từ local cache
 const phoneMatches = computed(() => {
   if (customerObj.value || isSyncingCustomerFields.value) return [];
-  const digits = customerPhoneInput.value.replace(/\D/g, "");
+  const digits = normalizePhone(customerPhoneInput.value);
   if (!digits || digits.length < 3) return [];
   return customers.value.filter((c) => c.phone.includes(digits)).slice(0, 6);
 });
@@ -728,14 +774,26 @@ const phoneMatches = computed(() => {
 const isNewCustomerComplete = computed(() =>
   !customerObj.value &&
   customerNameInput.value.trim().length >= 2 &&
-  customerPhoneInput.value.replace(/\D/g, "").length >= 8 &&
+  normalizePhone(customerPhoneInput.value).length >= 8 &&
   customerAddressInput.value.trim().length >= 3,
 );
 
 
-const salesTotal = computed(() => cart.value.filter((item) => item.type === "retail").reduce((acc, item) => acc + item.price, 0));
-const rentalsTotal = computed(() => cart.value.filter((item) => item.type === "rental").reduce((acc, item) => acc + item.price, 0));
-const depositTotal = computed(() => cart.value.filter((item) => item.type === "rental").reduce((acc, item) => acc + computeDeposit(item.price), 0));
+const salesTotal = computed(() =>
+  cart.value
+    .filter((item) => item.type === "retail")
+    .reduce((acc, item) => acc + item.price, 0),
+);
+const rentalsTotal = computed(() =>
+  cart.value
+    .filter((item) => item.type === "rental")
+    .reduce((acc, item) => acc + resolveRentPrice(item.price, rentalDays.value), 0),
+);
+const depositTotal = computed(() =>
+  cart.value
+    .filter((item) => item.type === "rental")
+    .reduce((acc, item) => acc + resolveDepositAmount(item.price), 0),
+);
 
 const total = computed(() => salesTotal.value + rentalsTotal.value + depositTotal.value);
 const splitTotal = computed(() => cashAmount.value + transferAmount.value);
@@ -751,7 +809,7 @@ const showCustomerWarning = computed(() => {
 // Tin nhắn cảnh báo cụ thể
 const customerWarningMessage = computed(() => {
   if (!customerNameInput.value.trim()) return "Vui lòng nhập họ tên khách hàng.";
-  if (customerPhoneInput.value.replace(/\D/g, "").length < 8) return "Số điện thoại chưa hợp lệ (tối thiểu 8 số).";
+  if (normalizePhone(customerPhoneInput.value).length < 8) return "Số điện thoại chưa hợp lệ (tối thiểu 8 số).";
   if (customerAddressInput.value.trim().length < 3) return "Vui lòng nhập địa chỉ liên hệ.";
   return "Cần điền đủ thông tin khách hàng.";
 });
@@ -841,7 +899,7 @@ const selectCustomer = (customer: CustomerListItem, autoSelected: boolean) => {
   customerNameInput.value = customer.name;
   customerPhoneInput.value = customer.phone;
   // address có thể không có trong CustomerListItem, để trống nếu vậy
-  customerAddressInput.value = (customer as unknown as { address?: string }).address ?? "";
+  customerAddressInput.value = customer.address ?? "";
   nameDropdownOpen.value = false;
   phoneDropdownOpen.value = false;
 
@@ -1238,7 +1296,7 @@ const confirmCheckout = async () => {
     // Nếu có sách thuê và khách chưa có trong DB → tự động upsert trước
     let resolvedCustomerId = selectedCustomerId.value;
     if (hasRentalItems.value && !resolvedCustomerId && isNewCustomerComplete.value) {
-      const phone = customerPhoneInput.value.replace(/\D/g, "");
+      const phone = normalizePhone(customerPhoneInput.value);
       isCreatingCustomer.value = true;
       try {
         const created = await upsertCustomer(phone, {
@@ -1256,6 +1314,7 @@ const confirmCheckout = async () => {
           membership_level: created.membership_level,
           deposit_balance: created.deposit_balance,
           debt: created.debt,
+          address: created.address,
           blacklist_flag: created.blacklist_flag,
         };
         customers.value.unshift(newCustomer);
@@ -1291,6 +1350,7 @@ const confirmCheckout = async () => {
     openInvoiceModalWithTargets(buildInvoiceTargetsFromCheckoutResponse(response));
     clearCart();
     clearCustomerSelection();
+    clearDraft();
     availableProducts.value = await fetchInventoryItems();
   } catch (error) {
     if (error instanceof StoryHubApiError) {
@@ -1368,10 +1428,16 @@ const handleGlobalHotkey = (event: Event) => {
 };
 
 const consumePendingScans = () => {
+  console.log('[CHECKOUT] consumePendingScans called');
   const queuedItems = scannerStore.consumePendingCheckoutItems();
+  console.log('[CHECKOUT] queuedItems:', queuedItems.length, 'lastScannedItem:', scannerStore.lastScannedItem?.id, 'lastScannedCode:', scannerStore.lastScannedCode);
 
   if (queuedItems.length === 0) {
     if (!scannerStore.lastScannedItem) {
+      if (scannerStore.lastScannedCode) {
+        addNotification("error", `Không tìm thấy sách có mã: ${scannerStore.lastScannedCode}`);
+        scannerStore.lastScannedCode = "";
+      }
       return;
     }
 
@@ -1423,6 +1489,7 @@ watch(
 );
 
 onMounted(async () => {
+  loadDraft();
   ws.connect("cashier-demo", "main");
   ws.subscribe(["item_status_changed"]);
   stopRealtimeWatch = watch(
@@ -1448,7 +1515,8 @@ onMounted(async () => {
 
   stopScannerWatch = watch(
     () => scannerStore.scanEventCounter,
-    () => {
+    (newVal, oldVal) => {
+      console.log('[CHECKOUT] scanEventCounter changed:', oldVal, '->', newVal);
       isScannerProcessing.value = true;
       setTimeout(() => {
         isScannerProcessing.value = false;
@@ -1462,7 +1530,7 @@ onMounted(async () => {
 
   if (route.query.focus === "customer" || route.query.mode === "rental") {
     setTimeout(() => {
-      customerSmartInputRef.value?.focus();
+      customerNameInputRef.value?.focus();
     }, 120);
   } else if (route.query.manual === "1") {
     setTimeout(() => {

@@ -47,6 +47,8 @@ _ROLE_SCOPES: dict[str, tuple[str, ...]] = {
         "rental:return",
         "rental:extend",
         "system:backup",
+        "admin:read",
+        "admin:write",
     ),
 }
 

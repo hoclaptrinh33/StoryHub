@@ -23,7 +23,6 @@ from app.db.session import get_db_session
 from app.services import (
     EventPublisher,
     compute_deposit,
-    compute_rent_price,
     compute_sell_price,
     get_cached_response,
     resolve_active_price_rule,
@@ -83,6 +82,9 @@ class UnifiedCheckoutPayload(BaseModel):
     price_rule_version: int
     price_override_applied: bool
     override_reason_code: str | None = None
+    auto_promo_id: int | None = None
+    auto_promo_name: str | None = None
+    auto_promo_discount_total: int = 0
     request_id: str
 
 
@@ -126,6 +128,32 @@ def _calculate_discount(subtotal: int, discount_type: str, discount_value: int) 
     if discount_type == "amount":
         return min(discount_value, subtotal)
     return min((subtotal * discount_value) // 100, subtotal)
+
+
+def _allocate_rental_discount(
+    rental_item_rows: list[dict[str, int | str]],
+    discount_total: int,
+) -> None:
+    if discount_total <= 0 or not rental_item_rows:
+        return
+
+    base_total = sum(int(item["rent_price"]) for item in rental_item_rows)
+    if base_total <= 0:
+        return
+
+    remaining = discount_total
+    last_index = len(rental_item_rows) - 1
+    for index, item in enumerate(rental_item_rows):
+        base_price = int(item["rent_price"])
+        if index == last_index:
+            item_discount = remaining
+        else:
+            item_discount = (base_price * discount_total) // base_total
+            item_discount = max(min(item_discount, remaining), 0)
+
+        item["rent_price"] = max(base_price - item_discount, 0)
+        item["auto_discount_amount"] = item_discount
+        remaining -= item_discount
 
 
 def _resolve_manager_approval(token: str) -> AuthContext:
@@ -218,6 +246,7 @@ async def unified_checkout(
     now = utc_now()
     now_iso = to_iso_z(now)
     due_date_iso = to_iso_z(now + timedelta(days=payload.rental_days))
+    checkout_weekday = now.weekday()
 
     sales_isbns: list[str] = []
     rental_skus: list[str] = []
@@ -284,6 +313,7 @@ async def unified_checkout(
         total_rentals = 0
         total_deposit = 0
         rental_item_rows: list[dict[str, int | str]] = []
+        auto_promo_snapshot: dict[str, int | str] | None = None
         if rental_skus:
             if payload.customer_id is None:
                 raise AppError(
@@ -315,10 +345,16 @@ async def unified_checkout(
                     )
 
                 p_sell_new = int(item_row["p_sell_new"])
-                p_rent = compute_rent_price(
-                    condition_level=int(item_row["condition_level"]),
-                    p_sell_new=p_sell_new,
-                    k_rent=pricing_rule.k_rent,
+                p_rent = max(
+                    int(
+                        round(
+                            p_sell_new
+                            * pricing_rule.k_rent
+                            * (int(item_row["condition_level"]) / 100.0)
+                            * payload.rental_days
+                        )
+                    ),
+                    2000,
                 )
                 p_deposit = compute_deposit(
                     p_sell_new=p_sell_new,
@@ -355,6 +391,43 @@ async def unified_checkout(
                         message=f"Không thể khóa sản phẩm thuê {sku} để tạo giao dịch.",
                         status_code=status.HTTP_409_CONFLICT,
                     )
+
+        if rental_item_rows and total_rentals > 0:
+            promo_result = await session.execute(
+                text(
+                    """
+                    SELECT id, name, day_of_week, discount_percent
+                    FROM automatic_promotion
+                    WHERE is_active = 1
+                      AND day_of_week = :day_of_week
+                    ORDER BY discount_percent DESC, id DESC
+                    LIMIT 1;
+                    """
+                ),
+                {"day_of_week": checkout_weekday},
+            )
+            promo_row = promo_result.mappings().first()
+            if promo_row is not None:
+                promo_discount_percent = int(promo_row["discount_percent"])
+                promo_discount_total = min(
+                    (total_rentals * promo_discount_percent) // 100,
+                    total_rentals,
+                )
+                if promo_discount_total > 0:
+                    rental_subtotal_before_discount = total_rentals
+                    _allocate_rental_discount(rental_item_rows, promo_discount_total)
+                    total_rentals = sum(
+                        int(item["rent_price"]) for item in rental_item_rows
+                    )
+                    auto_promo_snapshot = {
+                        "promo_id": int(promo_row["id"]),
+                        "promo_name": str(promo_row["name"]),
+                        "day_of_week": int(promo_row["day_of_week"]),
+                        "discount_percent": promo_discount_percent,
+                        "discount_total": promo_discount_total,
+                        "rental_subtotal_before_discount": rental_subtotal_before_discount,
+                        "rental_subtotal_after_discount": total_rentals,
+                    }
 
         subtotal_fee = total_sales + total_rentals
         discount_total = _calculate_discount(subtotal_fee, payload.discount_type, payload.discount_value)
@@ -740,6 +813,23 @@ async def unified_checkout(
                 device_id=device,
             )
 
+        if auto_promo_snapshot is not None:
+            await write_audit_log(
+                session,
+                actor_user_id=auth.user_id,
+                action="AUTO_PROMO_APPLIED",
+                entity_type="rental_contract",
+                entity_id=contract_id_out or payload.request_id,
+                before={
+                    "rental_subtotal": int(
+                        auto_promo_snapshot["rental_subtotal_before_discount"]
+                    ),
+                },
+                after=auto_promo_snapshot,
+                ip_address=ip_addr,
+                device_id=device,
+            )
+
         await write_audit_log(
             session,
             actor_user_id=auth.user_id,
@@ -754,6 +844,7 @@ async def unified_checkout(
                 "price_rule_version": pricing_rule.version_no,
                 "price_override_applied": price_override_applied,
                 "override_reason_code": override_reason_code,
+                "auto_promotion": auto_promo_snapshot,
             },
             ip_address=ip_addr,
             device_id=device,
@@ -770,6 +861,21 @@ async def unified_checkout(
             price_rule_version=pricing_rule.version_no,
             price_override_applied=price_override_applied,
             override_reason_code=override_reason_code,
+            auto_promo_id=(
+                int(auto_promo_snapshot["promo_id"])
+                if auto_promo_snapshot is not None
+                else None
+            ),
+            auto_promo_name=(
+                str(auto_promo_snapshot["promo_name"])
+                if auto_promo_snapshot is not None
+                else None
+            ),
+            auto_promo_discount_total=(
+                int(auto_promo_snapshot["discount_total"])
+                if auto_promo_snapshot is not None
+                else 0
+            ),
             request_id=payload.request_id,
         )
     )

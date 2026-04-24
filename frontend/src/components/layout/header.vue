@@ -22,10 +22,8 @@
       <router-link to="/ban-hang">BÁN HÀNG & CHO THUÊ</router-link>
       <router-link to="/hoan-tra">KIỂM ĐỊNH TRẢ</router-link>
       <!-- Chỉ manager và owner -->
-      <router-link v-if="isManagerOrOwner" to="/khuyen-mai">KHUYẾN MÃI</router-link>
       <router-link v-if="isManagerOrOwner" to="/kho">KHO</router-link>
       <router-link v-if="isManagerOrOwner" to="/bao-cao">BÁO CÁO</router-link>
-      <router-link v-if="isManagerOrOwner" to="/khach-hang">KHÁCH HÀNG</router-link>
       <!-- Chỉ owner -->
       <router-link v-if="isOwner" to="/quan-ly">QUẢN LÝ</router-link>
     </nav>

@@ -51,6 +51,8 @@ _ROLE_SCOPES: dict[str, tuple[str, ...]] = {
         "rental:return",
         "rental:extend",
         "system:backup",
+        "admin:read",    # Owner-only: xem dữ liệu nhạy cảm
+        "admin:write",   # Owner-only: thực hiện thao tác quản trị
     ),
 }
 

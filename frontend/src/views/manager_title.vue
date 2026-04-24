@@ -122,11 +122,7 @@ const filteredBooks = computed(() => {
   });
 });
 
-<<<<<<< HEAD
 
-=======
-// ─── Modal helpers ────────────────────────────────────────────────────────────
->>>>>>> 814fe260b1a73aa42624df817c78f33c24eb3a1e
 const openVolumeModal = (book: any) => {
   selectedBook.value = book;
   isModalOpen.value = true;
@@ -329,7 +325,6 @@ const saveConvertRental = async () => {
       volume_id: selectedVolume.value.id,
       quantity: formConvert.value.quantity,
       request_id: buildRequestId('convert'),
-      token: token.value,
     }, token.value);
     addNotification('success', 'Chuyển truyện thuê thành công!');
     isConvertRentalModalOpen.value = false;

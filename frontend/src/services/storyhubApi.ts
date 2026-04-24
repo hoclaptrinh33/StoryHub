@@ -123,6 +123,12 @@ export type UnifiedCheckoutPayload = {
   total_rentals: number;
   total_deposit: number;
   grand_total: number;
+  price_rule_version: number;
+  price_override_applied: boolean;
+  override_reason_code: string | null;
+  auto_promo_id: number | null;
+  auto_promo_name: string | null;
+  auto_promo_discount_total: number;
   request_id: string;
 };
 
@@ -169,6 +175,7 @@ export type CustomerListItem = {
   membership_level: string;
   deposit_balance: number;
   debt: number;
+  address: string | null;
   blacklist_flag: boolean;
 };
 
@@ -191,6 +198,7 @@ export type UpsertCustomerPayload = {
   deposit_balance: number;
   debt: number;
   blacklist_flag: boolean;
+  address: string | null;
   updated_at: string;
 };
 
@@ -205,24 +213,39 @@ export type InventoryItemListItem = {
   type: "retail" | "rental";
 };
 
+export type InventoryLogItem = {
+  id: number;
+  user_id: number;
+  username: string | null;
+  action_type: string;
+  target_type: string;
+  target_id: string;
+  title_name: string | null;
+  sub_text: string | null;
+  change_qty: number;
+  old_qty: number | null;
+  new_qty: number | null;
+  note: string | null;
+  created_at: string;
+};
+
 export type ConvertToRentalRequest = {
   volume_id: number;
   quantity: number;
   request_id: string;
-token: string;
 };
 
 export type CreateVolumeRequest = {
   title_name: string;
-  author: string;
-  description: string;
-  cover_url: string | null;
-  categories: string[];
-  page_count: number | null;
-  published_date: string | null;
+  author?: string;
+  description?: string | null;
+  cover_url?: string | null;
+  categories?: string[];
+  page_count?: number | null;
+  published_date?: string | null;
   volume_number: number;
   isbn: string;
-  p_sell_new: number;
+  p_sell_new?: number;
   retail_stock: number;
   request_id: string;
 };
@@ -677,6 +700,18 @@ export async function fetchInventoryItems(
   });
 }
 
+export async function fetchInventoryLogs(
+  limit = 50,
+  offset = 0,
+  token = "manager-demo",
+): Promise<InventoryLogItem[]> {
+  const path = `/api/v1/inventory/logs?limit=${limit}&offset=${offset}`;
+  return request<InventoryLogItem[]>(path, {
+    method: "GET",
+    token,
+  });
+}
+
 export async function fetchInventoryItemStatus(
   itemId: string,
   token = "cashier-demo",
@@ -896,4 +931,391 @@ export async function fetchTitlesWithVolumes(q?: string, token = "manager-demo")
     ? `/api/v1/kho/titles?q=${encodeURIComponent(q)}`
     : "/api/v1/kho/titles";
   return request<TitleEntry[]>(path, { method: "GET", token });
+}
+
+// ─── ADMIN API (Owner-only) ──────────────────────────────────────────────────
+
+export type AdminCustomerOverrideRequest = {
+  deposit_balance?: number;
+  debt?: number;
+  blacklist_flag?: boolean;
+  reason: string;
+};
+
+export type VoucherItem = {
+  id: number;
+  code: string;
+  voucher_type: "percent" | "amount";
+  value: number;
+  min_spend: number;
+  max_discount: number | null;
+  max_uses: number | null;
+  current_uses: number;
+  start_at: string | null;
+  end_at: string | null;
+  is_active: boolean;
+  created_at: string;
+};
+
+export type VoucherCreate = {
+  code: string;
+  voucher_type: "percent" | "amount";
+  value: number;
+  min_spend?: number;
+  max_discount?: number | null;
+  max_uses?: number | null;
+  start_at?: string | null;
+  end_at?: string | null;
+};
+
+export type AutoPromoItem = {
+  id: number;
+  name: string;
+  day_of_week: number;
+  discount_percent: number;
+  is_active: boolean;
+  created_at: string;
+};
+
+export type SystemUser = {
+  id: number;
+  username: string;
+  full_name: string | null;
+  role: "cashier" | "manager";
+  is_active: boolean;
+  created_at: string;
+};
+
+export type AuditLogItem = {
+  id: number;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  before_json: string | null;
+  after_json: string | null;
+  ip_address: string | null;
+  device_id: string | null;
+  created_at: string;
+  actor_name: string | null;
+  actor_full_name: string | null;
+};
+
+export type AdminTransactionItem = {
+  transaction_type: "sale" | "rental";
+  reference_id: string;
+  customer_name: string;
+  amount: number;
+  created_at: string;
+  status: string;
+  can_refund: boolean;
+  can_hard_delete: boolean;
+};
+
+export type HardDeleteTransactionRequest = {
+  reason: string;
+};
+
+export type EmergencyRefundSaleOrderRequest = {
+  reason: string;
+  request_id: string;
+  refund_method?: "cash" | "bank_transfer" | "e_wallet" | "original_method";
+};
+
+export type EmergencyRefundSaleOrderPayload = {
+  refund_id: string;
+  order_id: string;
+  refunded_total: number;
+  order_status: "refunded" | "partially_refunded";
+  processed_at: string;
+};
+
+export type EmergencyRefundRentalContractRequest = {
+  reason: string;
+  request_id: string;
+  refund_method?: "cash" | "bank_transfer" | "e_wallet" | "original_method";
+};
+
+export type EmergencyRefundRentalContractPayload = {
+  refund_id: string;
+  contract_id: string;
+  refunded_total: number;
+  contract_status: "cancelled";
+  processed_at: string;
+};
+
+export type ActivePriceRulePayload = {
+  rule_id: number | null;
+  version_no: number;
+  k_rent: number;
+  k_deposit: number;
+  d_floor: number;
+  used_demand_factor: number;
+  used_cap_ratio: number;
+  note: string | null;
+  activated_at: string | null;
+};
+
+export type UpdateActivePriceRuleRequest = {
+  k_rent: number;
+  k_deposit: number;
+  d_floor: number;
+  used_demand_factor?: number;
+  used_cap_ratio?: number;
+  note?: string | null;
+};
+
+export type BulkPriceUpdateRequest = {
+  percent_delta: number;
+  reason: string;
+};
+
+export type BulkPriceUpdatePayload = {
+  total_volumes: number;
+  affected_volumes: number;
+  percent_delta: number;
+  min_new_price: number;
+  max_new_price: number;
+};
+
+// Khách hàng admin
+export async function fetchAllCustomersAdmin(
+  token: string,
+  q?: string,
+  blacklistedOnly?: boolean,
+): Promise<CustomerListItem[]> {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (blacklistedOnly) params.set("blacklisted_only", "true");
+  const qs = params.toString();
+  return request<CustomerListItem[]>(`/api/v1/customers/all${qs ? `?${qs}` : ""}`, { method: "GET", token });
+}
+
+export async function adminOverrideCustomer(
+  customerId: number,
+  payload: AdminCustomerOverrideRequest,
+  token: string,
+): Promise<{ status: string; customer_id: number }> {
+  return request(`/api/v1/customers/${customerId}/admin-override`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+// Voucher
+export async function fetchVouchers(token: string): Promise<VoucherItem[]> {
+  return request<VoucherItem[]>("/api/v1/promotions/vouchers", { method: "GET", token });
+}
+
+export async function createVoucher(payload: VoucherCreate, token: string): Promise<{ id: number; code: string }> {
+  return request("/api/v1/promotions/vouchers", { method: "POST", body: JSON.stringify(payload), token });
+}
+
+export async function updateVoucher(
+  id: number,
+  payload: {
+    is_active?: boolean;
+    value?: number;
+    min_spend?: number;
+    max_discount?: number | null;
+    max_uses?: number | null;
+    end_at?: string | null;
+  },
+  token: string,
+): Promise<{ status: string; voucher_id: number }> {
+  return request<{ status: string; voucher_id: number }>(
+    `/api/v1/promotions/vouchers/${id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+      token,
+    },
+  );
+}
+
+export async function updateVoucherStatus(id: number, isActive: boolean, token: string): Promise<void> {
+  return request(`/api/v1/promotions/vouchers/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_active: isActive }),
+    token,
+  });
+}
+
+export async function deleteVoucher(id: number, token: string): Promise<void> {
+  return request(`/api/v1/promotions/vouchers/${id}`, { method: "DELETE", token });
+}
+
+// Khuyến mãi tự động
+export async function fetchAutoPromotions(token: string): Promise<AutoPromoItem[]> {
+  return request<AutoPromoItem[]>("/api/v1/promotions/auto-promotions", { method: "GET", token });
+}
+
+export async function createAutoPromotion(
+  payload: { name: string; day_of_week: number; discount_percent: number },
+  token: string,
+): Promise<{ id: number }> {
+  return request("/api/v1/promotions/auto-promotions", { method: "POST", body: JSON.stringify(payload), token });
+}
+
+export async function updateAutoPromotion(
+  id: number,
+  payload: {
+    name?: string;
+    day_of_week?: number;
+    discount_percent?: number;
+    is_active?: boolean;
+  },
+  token: string,
+): Promise<{ status: string; promo_id: number }> {
+  return request<{ status: string; promo_id: number }>(
+    `/api/v1/promotions/auto-promotions/${id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+      token,
+    },
+  );
+}
+
+export async function toggleAutoPromotion(id: number, isActive: boolean, token: string): Promise<void> {
+  return request(`/api/v1/promotions/auto-promotions/${id}/toggle`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_active: isActive }),
+    token,
+  });
+}
+
+export async function deleteAutoPromotion(id: number, token: string): Promise<void> {
+  return request(`/api/v1/promotions/auto-promotions/${id}`, { method: "DELETE", token });
+}
+
+// System Config
+export async function fetchSystemConfig(token: string): Promise<Record<string, string>> {
+  return request<Record<string, string>>("/api/v1/system/config", { method: "GET", token });
+}
+
+export async function updateSystemConfig(configs: Record<string, string>, token: string): Promise<Record<string, string>> {
+  return request<Record<string, string>>("/api/v1/system/config", {
+    method: "PATCH",
+    body: JSON.stringify({ configs }),
+    token,
+  });
+}
+
+// Audit Logs
+export async function fetchAuditLogs(token: string, params?: { limit?: number; offset?: number; action?: string }): Promise<AuditLogItem[]> {
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  if (params?.action) qs.set("action", params.action);
+  const qsStr = qs.toString();
+  return request<AuditLogItem[]>(`/api/v1/system/audit-logs${qsStr ? `?${qsStr}` : ""}`, { method: "GET", token });
+}
+
+// Transaction Monitoring
+export async function fetchAdminTransactions(
+  token: string,
+  params?: { q?: string; kind?: "all" | "sale" | "rental"; limit?: number; offset?: number },
+): Promise<AdminTransactionItem[]> {
+  const qs = new URLSearchParams();
+  if (params?.q) qs.set("q", params.q);
+  if (params?.kind) qs.set("kind", params.kind);
+  if (params?.limit) qs.set("limit", String(params.limit));
+  if (params?.offset) qs.set("offset", String(params.offset));
+  const qsStr = qs.toString();
+  return request<AdminTransactionItem[]>(`/api/v1/system/transactions${qsStr ? `?${qsStr}` : ""}`, { method: "GET", token });
+}
+
+export async function hardDeleteAdminTransaction(
+  transactionType: "sale" | "rental",
+  referenceId: string | number,
+  payload: HardDeleteTransactionRequest,
+  token: string,
+): Promise<{ status: string; transaction_type: string; reference_id: string }> {
+  return request(`/api/v1/system/transactions/${transactionType}/${encodeURIComponent(String(referenceId))}/hard-delete`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export async function emergencyRefundSaleOrder(
+  orderId: number,
+  payload: EmergencyRefundSaleOrderRequest,
+  token: string,
+): Promise<EmergencyRefundSaleOrderPayload> {
+  return request<EmergencyRefundSaleOrderPayload>(`/api/v1/system/transactions/sale/${orderId}/emergency-refund`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export async function emergencyRefundRentalContract(
+  contractId: number,
+  payload: EmergencyRefundRentalContractRequest,
+  token: string,
+): Promise<EmergencyRefundRentalContractPayload> {
+  return request<EmergencyRefundRentalContractPayload>(
+    `/api/v1/system/transactions/rental/${contractId}/emergency-refund`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+      token,
+    },
+  );
+}
+
+// Pricing Engine
+export async function fetchActivePricingRule(token: string): Promise<ActivePriceRulePayload> {
+  return request<ActivePriceRulePayload>("/api/v1/system/pricing/active", {
+    method: "GET",
+    token,
+  });
+}
+
+export async function updateActivePricingRule(
+  payload: UpdateActivePriceRuleRequest,
+  token: string,
+): Promise<ActivePriceRulePayload> {
+  return request<ActivePriceRulePayload>("/api/v1/system/pricing/active", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export async function applyBulkPriceUpdate(
+  payload: BulkPriceUpdateRequest,
+  token: string,
+): Promise<BulkPriceUpdatePayload> {
+  return request<BulkPriceUpdatePayload>("/api/v1/system/pricing/bulk-update", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+// User Management
+export async function fetchSystemUsers(token: string): Promise<SystemUser[]> {
+  return request<SystemUser[]>("/api/v1/system/users", { method: "GET", token });
+}
+
+export async function createSystemUser(
+  payload: { username: string; password: string; full_name?: string; role: "cashier" | "manager" },
+  token: string,
+): Promise<{ id: number; username: string; role: string }> {
+  return request("/api/v1/system/users", { method: "POST", body: JSON.stringify(payload), token });
+}
+
+export async function updateSystemUser(
+  userId: number,
+  payload: { is_active?: boolean; full_name?: string; role?: "cashier" | "manager"; new_password?: string },
+  token: string,
+): Promise<void> {
+  return request(`/api/v1/system/users/${userId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    token,
+  });
 }

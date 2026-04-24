@@ -52,6 +52,7 @@ class CustomerListItem(BaseModel):
     deposit_balance: int
     debt: int
     blacklist_flag: bool
+    address: str | None = None
 
 
 def _ensure_phone_valid(phone: str) -> None:
@@ -80,7 +81,8 @@ async def list_customers(
             membership_level,
             deposit_balance,
             debt,
-            blacklist_flag
+            blacklist_flag,
+            address
         FROM customer
         WHERE deleted_at IS NULL
     """
@@ -104,6 +106,7 @@ async def list_customers(
             deposit_balance=row["deposit_balance"],
             debt=row["debt"],
             blacklist_flag=bool(row["blacklist_flag"]),
+            address=row["address"],
         )
         for row in rows
     ]
@@ -349,3 +352,145 @@ async def upsert_customer_profile(
         raise
 
     return envelope
+
+
+# ==========================================
+# ADMIN-ONLY ENDPOINTS (Owner chỉ)
+# ==========================================
+
+class AdminCustomerOverrideRequest(BaseModel):
+    """Chỉ dùng bởi Owner để ghi đè trực tiếp giá trị tuyệt đối."""
+    deposit_balance: int | None = None  # Ghi đè số dư cọc
+    debt: int | None = None             # Ghi đè công nợ
+    blacklist_flag: bool | None = None  # Bật/tắt blacklist
+    reason: str = Field(min_length=5, max_length=300, description="Lý do ghi đè (bắt buộc để audit)")
+
+
+@router.get("/all", response_model=ResponseEnvelope[list[CustomerListItem]])
+async def list_all_customers_admin(
+    q: str | None = None,
+    blacklisted_only: bool = False,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[list[CustomerListItem]]:
+    """Admin view: toàn bộ khách hàng, không giới hạn số lượng, dành cho Owner."""
+    auth.require_role("owner")
+    auth.require_scope("admin:read")
+
+    query_str = """
+        SELECT id, name, phone, membership_level,
+               deposit_balance, debt, blacklist_flag, address
+        FROM customer
+        WHERE deleted_at IS NULL
+    """
+    params: dict[str, object] = {}
+
+    if q:
+        query_str += " AND (name LIKE :q OR phone LIKE :q)"
+        params["q"] = f"%{q}%"
+
+    if blacklisted_only:
+        query_str += " AND blacklist_flag = 1"
+
+    query_str += " ORDER BY updated_at DESC LIMIT 1000"
+
+    result = await session.execute(text(query_str), params)
+    rows = result.mappings().all()
+
+    customers = [
+        CustomerListItem(
+            id=row["id"],
+            name=row["name"],
+            phone=row["phone"],
+            membership_level=row["membership_level"],
+            deposit_balance=row["deposit_balance"],
+            debt=row["debt"],
+            blacklist_flag=bool(row["blacklist_flag"]),
+            address=row["address"],
+        )
+        for row in rows
+    ]
+    return success_response(customers)
+
+
+@router.patch("/{customer_id}/admin-override", response_model=ResponseEnvelope[dict[str, object]])
+async def admin_override_customer(
+    customer_id: int,
+    payload: AdminCustomerOverrideRequest,
+    request: Request,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[dict[str, object]]:
+    """Owner ghi đè trực tiếp công nợ, tiền cọc hoặc blacklist (bypass validation thông thường)."""
+    auth.require_role("owner")
+    auth.require_scope("admin:write")
+
+    if all(v is None for v in [payload.deposit_balance, payload.debt, payload.blacklist_flag]):
+        raise AppError(
+            code="NO_CHANGES",
+            message="Vui lòng chỉ định ít nhất một trường cần thay đổi.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Lấy dữ liệu hiện tại để audit
+    old_result = await session.execute(
+        text("SELECT id, name, deposit_balance, debt, blacklist_flag FROM customer WHERE id = :id AND deleted_at IS NULL"),
+        {"id": customer_id},
+    )
+    old_row = old_result.mappings().first()
+    if not old_row:
+        raise AppError(
+            code="CUSTOMER_NOT_FOUND",
+            message="Không tìm thấy khách hàng.",
+            status_code=status.HTTP_404_NOT_FOUND,
+        )
+
+    # Xây dựng câu UPDATE động
+    set_clauses: list[str] = ["updated_at = CURRENT_TIMESTAMP"]
+    params: dict[str, object] = {"id": customer_id}
+
+    if payload.deposit_balance is not None:
+        if payload.deposit_balance < 0:
+            raise AppError(code="INVALID_VALUE", message="Tiền cọc không thể âm.", status_code=status.HTTP_400_BAD_REQUEST)
+        set_clauses.append("deposit_balance = :deposit_balance")
+        params["deposit_balance"] = payload.deposit_balance
+
+    if payload.debt is not None:
+        if payload.debt < 0:
+            raise AppError(code="INVALID_VALUE", message="Công nợ không thể âm.", status_code=status.HTTP_400_BAD_REQUEST)
+        set_clauses.append("debt = :debt")
+        params["debt"] = payload.debt
+
+    if payload.blacklist_flag is not None:
+        set_clauses.append("blacklist_flag = :blacklist_flag")
+        params["blacklist_flag"] = 1 if payload.blacklist_flag else 0
+
+    ip_address, device_id = get_request_meta(request)
+
+    async with session.begin():
+        await session.execute(
+            text(f"UPDATE customer SET {', '.join(set_clauses)} WHERE id = :id"),
+            params,
+        )
+        # Ghi audit log (note lưu vào after_json)
+        await write_audit_log(
+            session,
+            actor_user_id=auth.user_id,
+            action="ADMIN_CUSTOMER_OVERRIDE",
+            entity_type="customer",
+            entity_id=str(customer_id),
+            before={
+                "deposit_balance": old_row["deposit_balance"],
+                "debt": old_row["debt"],
+                "blacklist_flag": bool(old_row["blacklist_flag"]),
+            },
+            after={
+                **{k: v for k, v in payload.model_dump().items() if v is not None and k != "reason"},
+                "_reason": payload.reason,
+            },
+            ip_address=ip_address,
+            device_id=device_id,
+        )
+
+    return success_response({"status": "overridden", "customer_id": customer_id})
+

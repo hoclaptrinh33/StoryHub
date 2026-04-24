@@ -14,6 +14,8 @@ MIGRATION_VERSIONS = [
     "0002_add_base_price",
     "0003_create_user_table",
     "0004_pricing_rules_and_snapshots",
+    "0005_admin_tables",
+    "0006_rental_refund_tables",
 ]
 _SCHEMA_MIGRATIONS_TABLE = "schema_migrations"
 

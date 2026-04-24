@@ -16,6 +16,10 @@ from app.main import app
 from tests.auth_helpers import build_auth_headers
 
 _SEED_RESET_ORDER = (
+    "rental_refund_item",
+    "rental_refund",
+    "automatic_promotion",
+    "voucher",
     "audit_log",
     "backup_job",
     "metadata_cache",
