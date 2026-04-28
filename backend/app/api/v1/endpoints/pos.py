@@ -359,11 +359,17 @@ async def create_pos_order(
                         status_code=status.HTTP_423_LOCKED,
                     )
             
-            # 2. Always decrement Volume stock
-            await session.execute(
-                text("UPDATE volume SET retail_stock = retail_stock - 1, updated_at = CURRENT_TIMESTAMP WHERE id = :vid"),
+            # 2. Always decrement Volume stock (guard: không cho âm)
+            stock_res = await session.execute(
+                text("UPDATE volume SET retail_stock = retail_stock - 1, updated_at = CURRENT_TIMESTAMP WHERE id = :vid AND retail_stock > 0"),
                 {"vid": item_row["volume_id"]}
             )
+            if stock_res.rowcount != 1:
+                raise AppError(
+                    code="INSUFFICIENT_STOCK",
+                    message=f"Số lượng hàng bán lẻ đã hết cho volume {item_row['volume_id']}.",
+                    status_code=status.HTTP_409_CONFLICT,
+                )
 
         await session.execute(
             text(
@@ -581,21 +587,31 @@ async def create_pos_order(
             device_id=device_id,
         )
 
-    envelope = success_response(
-        CreatePosOrderPayload(
-            order_id=str(order_id),
-            status="paid",
-            subtotal=subtotal,
-            discount_total=discount_total,
-            grand_total=grand_total,
-            price_rule_version=pricing_rule.version_no,
-            price_override_applied=price_override_applied,
-            override_reason_code=override_reason_code,
-            payment_breakdown=payload.split_payments,
-            line_items=line_items,
+        # Build envelope + cache idempotency TRONG CÙNG transaction
+        envelope = success_response(
+            CreatePosOrderPayload(
+                order_id=str(order_id),
+                status="paid",
+                subtotal=subtotal,
+                discount_total=discount_total,
+                grand_total=grand_total,
+                price_rule_version=pricing_rule.version_no,
+                price_override_applied=price_override_applied,
+                override_reason_code=override_reason_code,
+                payment_breakdown=payload.split_payments,
+                line_items=line_items,
+            )
         )
-    )
 
+        await store_cached_response(
+            session,
+            scope="pos.create_order",
+            request_id=payload.request_id,
+            status_code=status.HTTP_200_OK,
+            payload=envelope.model_dump(),
+        )
+
+    # Post-commit: publish events (idempotent, OK nếu fail)
     for item_row in item_rows:
         if item_row["id"]:
             await event_publisher.publish_item_status_changed(
@@ -607,26 +623,6 @@ async def create_pos_order(
                 changed_by=auth.user_id,
                 branch_id=auth.branch_id,
             )
-
-    try:
-        async with session.begin():
-            await store_cached_response(
-                session,
-                scope="pos.create_order",
-                request_id=payload.request_id,
-                status_code=status.HTTP_200_OK,
-                payload=envelope.model_dump(),
-            )
-    except IntegrityError:
-        await session.rollback()
-        cached = await get_cached_response(
-            session,
-            scope="pos.create_order",
-            request_id=payload.request_id,
-        )
-        if cached is not None:
-            return cached.payload
-        raise
 
     return envelope
 
@@ -879,34 +875,23 @@ async def refund_pos_order(
             device_id=device_id,
         )
 
-    envelope = success_response(
-        RefundPosOrderPayload(
-            refund_id=str(refund_id),
-            order_id=str(order_id),
-            refunded_total=refund_amount,
-            order_status=order_status,
-            processed_at=now_iso,
-        )
-    )
-
-    try:
-        async with session.begin():
-            await store_cached_response(
-                session,
-                scope="pos.refund_order",
-                request_id=payload.request_id,
-                status_code=status.HTTP_200_OK,
-                payload=envelope.model_dump(),
+        # Build envelope + cache idempotency TRONG CÙNG transaction
+        envelope = success_response(
+            RefundPosOrderPayload(
+                refund_id=str(refund_id),
+                order_id=str(order_id),
+                refunded_total=refund_amount,
+                order_status=order_status,
+                processed_at=now_iso,
             )
-    except IntegrityError:
-        await session.rollback()
-        cached = await get_cached_response(
+        )
+
+        await store_cached_response(
             session,
             scope="pos.refund_order",
             request_id=payload.request_id,
+            status_code=status.HTTP_200_OK,
+            payload=envelope.model_dump(),
         )
-        if cached is not None:
-            return cached.payload
-        raise
 
     return envelope

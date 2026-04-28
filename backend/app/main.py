@@ -1,5 +1,8 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+
+from sqlalchemy import text
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -16,6 +19,7 @@ from app.core.config import get_settings
 from app.core.errors import AppError
 from app.core.logging import configure_logging
 from app.db.runtime_schema import ensure_runtime_tables
+from app.db.session import SessionLocal
 from app.services import (
     EventPublisher,
     RealtimeMetrics,
@@ -24,6 +28,31 @@ from app.services import (
 )
 
 logger = logging.getLogger(__name__)
+
+async def overdue_checker_task():
+    """Background task to automatically mark active contracts as overdue if due_date has passed."""
+    while True:
+        try:
+            async with SessionLocal() as session:
+                async with session.begin():
+                    result = await session.execute(
+                        text("""
+                            UPDATE rental_contract
+                            SET status = 'overdue', updated_at = CURRENT_TIMESTAMP
+                            WHERE status = 'active'
+                              AND due_date < CURRENT_TIMESTAMP
+                              AND deleted_at IS NULL
+                        """)
+                    )
+                    if result.rowcount > 0:
+                        logger.info(f"Auto-marked {result.rowcount} contracts as overdue.")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Overdue checker failed: {e}")
+        
+        # Run every 1 hour
+        await asyncio.sleep(3600)
 
 
 def _extract_request_meta(request: Request) -> dict[str, str]:
@@ -54,9 +83,14 @@ async def lifespan(app: FastAPI):
         metrics=app.state.realtime_metrics,
     )
     await ensure_runtime_tables()
+    
+    # Khởi động background task
+    overdue_task = asyncio.create_task(overdue_checker_task())
+    
     try:
         yield
     finally:
+        overdue_task.cancel()
         await app.state.websocket_manager.notify_shutdown()
         await app.state.event_publisher.shutdown()
 

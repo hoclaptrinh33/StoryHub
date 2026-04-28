@@ -322,11 +322,17 @@ async def unified_checkout(
                 text("UPDATE item SET status = 'sold', deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
                 {"id": it["id"]}
             )
-            # Update volume stock
-            await session.execute(
-                text("UPDATE volume SET retail_stock = retail_stock - 1, updated_at = CURRENT_TIMESTAMP WHERE id = :vid"),
+            # Update volume stock (guard: không cho âm)
+            stock_res = await session.execute(
+                text("UPDATE volume SET retail_stock = retail_stock - 1, updated_at = CURRENT_TIMESTAMP WHERE id = :vid AND retail_stock > 0"),
                 {"vid": it["volume_id"]}
             )
+            if stock_res.rowcount != 1:
+                raise AppError(
+                    code="INSUFFICIENT_STOCK",
+                    message=f"Số lượng hàng bán lẻ đã hết cho volume {it['volume_id']}.",
+                    status_code=status.HTTP_409_CONFLICT,
+                )
 
         # Process Sale Volumes (from ISBN)
         for vol in sale_volumes_to_process:
@@ -360,10 +366,16 @@ async def unified_checkout(
                     {"id": item_to_consume}
                 )
             
-            await session.execute(
-                text("UPDATE volume SET retail_stock = retail_stock - 1, updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
+            stock_res = await session.execute(
+                text("UPDATE volume SET retail_stock = retail_stock - 1, updated_at = CURRENT_TIMESTAMP WHERE id = :id AND retail_stock > 0"),
                 {"id": vol["id"]}
             )
+            if stock_res.rowcount != 1:
+                raise AppError(
+                    code="INSUFFICIENT_STOCK",
+                    message=f"Số lượng hàng bán lẻ đã hết cho volume {vol['id']}.",
+                    status_code=status.HTTP_409_CONFLICT,
+                )
 
         # Process Rental Items
         if rental_items_to_process and payload.customer_id is None:
@@ -810,21 +822,32 @@ async def unified_checkout(
             device_id=device,
         )
 
-    envelope = success_response(
-        UnifiedCheckoutPayload(
-            order_id=order_id_out,
-            rental_contract_id=contract_id_out,
-            total_sales=total_sales,
-            total_rentals=total_rentals,
-            total_deposit=total_deposit,
-            grand_total=grand_total,
-            price_rule_version=pricing_rule.version_no,
-            price_override_applied=price_override_applied,
-            override_reason_code=override_reason_code,
-            request_id=payload.request_id,
+        # Build envelope TRONG transaction để có order_id/contract_id
+        envelope = success_response(
+            UnifiedCheckoutPayload(
+                order_id=order_id_out,
+                rental_contract_id=contract_id_out,
+                total_sales=total_sales,
+                total_rentals=total_rentals,
+                total_deposit=total_deposit,
+                grand_total=grand_total,
+                price_rule_version=pricing_rule.version_no,
+                price_override_applied=price_override_applied,
+                override_reason_code=override_reason_code,
+                request_id=payload.request_id,
+            )
         )
-    )
 
+        # Cache idempotency TRONG CÙNG transaction (atomic với đơn hàng)
+        await store_cached_response(
+            session,
+            scope="checkout.unified",
+            request_id=payload.request_id,
+            status_code=200,
+            payload=envelope.model_dump(),
+        )
+
+    # Post-commit: publish events (idempotent, OK nếu fail)
     for rental_item in rental_item_rows:
         await event_publisher.publish_item_status_changed(
             item_id=str(rental_item["item_id"]),
@@ -835,26 +858,6 @@ async def unified_checkout(
             changed_by=auth.user_id,
             branch_id=auth.branch_id,
         )
-
-    try:
-        async with session.begin():
-            await store_cached_response(
-                session,
-                scope="checkout.unified",
-                request_id=payload.request_id,
-                status_code=200,
-                payload=envelope.model_dump(),
-            )
-    except IntegrityError:
-        await session.rollback()
-        cached = await get_cached_response(
-            session,
-            scope="checkout.unified",
-            request_id=payload.request_id,
-        )
-        if cached is not None:
-            return cached.payload
-        raise
 
     return envelope
 

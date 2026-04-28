@@ -1082,16 +1082,18 @@ async def list_titles_with_volumes(
         return success_response([])
 
     title_ids = [int(r["id"]) for r in title_rows]
-    id_placeholders = ",".join(str(i) for i in title_ids)
+    tid_params = {f"tid_{i}": tid for i, tid in enumerate(title_ids)}
+    tid_placeholders = ", ".join(f":tid_{i}" for i in range(len(title_ids)))
 
     # 2. Lấy volumes của các titles đó
     vol_result = await session.execute(
         text(f"""
             SELECT id, title_id, volume_number, isbn, p_sell_new, retail_stock
             FROM volume
-            WHERE title_id IN ({id_placeholders}) AND deleted_at IS NULL
+            WHERE title_id IN ({tid_placeholders}) AND deleted_at IS NULL
             ORDER BY title_id ASC, volume_number ASC
-        """)
+        """),
+        tid_params,
     )
     vol_rows = vol_result.mappings().all()
 
@@ -1102,15 +1104,16 @@ async def list_titles_with_volumes(
     rental_count_by_volume: dict[int, int] = {}
 
     if volume_ids:
-        vol_id_placeholders = ",".join(str(i) for i in volume_ids)
+        vid_params = {f"vid_{i}": vid for i, vid in enumerate(volume_ids)}
+        vid_placeholders = ", ".join(f":vid_{i}" for i in range(len(volume_ids)))
         item_result = await session.execute(
             text(f"""
                 SELECT id, volume_id, status, item_type, condition_level, notes, version_no, reserved_at, reservation_expire_at
                 FROM item
-                WHERE volume_id IN ({vol_id_placeholders}) AND deleted_at IS NULL
-
+                WHERE volume_id IN ({vid_placeholders}) AND deleted_at IS NULL
                 ORDER BY volume_id ASC, id ASC
-            """)
+            """),
+            vid_params,
         )
         item_rows = item_result.mappings().all()
         for ir in item_rows:
@@ -1136,15 +1139,16 @@ async def list_titles_with_volumes(
                 rental_count_by_volume[vid] = rental_count_by_volume.get(vid, 0) + 1
 
     # 4. Ghép kết quả
-    K_RENT = 0.05
-    K_DEPOSIT = 0.30
+    pricing_rule = await resolve_active_price_rule(session)
+    k_rent = pricing_rule.base_rent_ratio / 100.0 if pricing_rule.base_rent_ratio else 0.05
+    k_deposit = 0.30  # Deposit ratio logic
 
     volumes_by_title: dict[int, list[TitleVolumeRow]] = {}
     for vr in vol_rows:
         tid = int(vr["title_id"])
         vid = int(vr["id"])
         p_sell = int(vr["p_sell_new"] or 0)
-        auto_rental = max(int(round(p_sell * K_RENT)), 500)
+        auto_rental = max(int(round(p_sell * k_rent)), 500)
         volumes_by_title.setdefault(tid, []).append(
             TitleVolumeRow(
                 id=vid,
@@ -1152,7 +1156,7 @@ async def list_titles_with_volumes(
                 isbn=vr["isbn"],
                 p_sell_new=p_sell,
                 price_rental=auto_rental,
-                price_deposit=max(int(round(p_sell * K_DEPOSIT)), 1000),
+                price_deposit=max(int(round(p_sell * k_deposit)), 1000),
                 retail_stock=int(vr["retail_stock"] or 0),
                 rental_item_count=rental_count_by_volume.get(vid, 0),
                 items=items_by_volume.get(vid, []),
@@ -1265,53 +1269,60 @@ async def update_title(
         except Exception:
             pass
 
-    await session.execute(
-        text("""
-            UPDATE title
-            SET name = :name, 
-                author = :author, 
-                description = :desc, 
-                genre = :genre, 
-                publisher = :pub,
-                cover_url = :cover,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = :id AND deleted_at IS NULL
-        """),
-        {
-            "id": title_id, 
-            "name": payload.name, 
-            "author": payload.author, 
-            "desc": payload.description, 
-            "genre": payload.genre, 
-            "pub": payload.publisher,
-            "cover": normalized_cover_url or None
-        }
-    )
-    await session.commit()
-    old_title_res = await session.execute(
-        text("SELECT name, author, description, genre, publisher, cover_url FROM title WHERE id = :id"),
-        {"id": title_id}
-    )
-    old_title = old_title_res.mappings().first()
-    
-    await write_audit_log(
-        session=session,
-        actor_user_id=auth.user_id,
-        action="UPDATE_TITLE",
-        entity_type="title",
-        entity_id=str(title_id),
-        before=dict(old_title) if old_title else None,
-        after={
-            "name": payload.name,
-            "author": payload.author,
-            "description": payload.description,
-            "genre": payload.genre,
-            "publisher": payload.publisher,
-            "cover_url": normalized_cover_url
-        },
-        ip_address=None,
-        device_id=None,
-    )
+    async with session.begin():
+        # Lấy old data TRƯỜC khi update (để ghi audit chính xác)
+        old_title_res = await session.execute(
+            text("SELECT name, author, description, genre, publisher, cover_url FROM title WHERE id = :id AND deleted_at IS NULL"),
+            {"id": title_id}
+        )
+        old_title = old_title_res.mappings().first()
+        if not old_title:
+            raise AppError(code="TITLE_NOT_FOUND", message="Không tìm thấy đầu truyện", status_code=404)
+
+        old_data = dict(old_title)
+
+        await session.execute(
+            text("""
+                UPDATE title
+                SET name = :name, 
+                    author = :author, 
+                    description = :desc, 
+                    genre = :genre, 
+                    publisher = :pub,
+                    cover_url = :cover,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id AND deleted_at IS NULL
+            """),
+            {
+                "id": title_id, 
+                "name": payload.name, 
+                "author": payload.author, 
+                "desc": payload.description, 
+                "genre": payload.genre, 
+                "pub": payload.publisher,
+                "cover": normalized_cover_url or None
+            }
+        )
+
+        await write_audit_log(
+            session=session,
+            actor_user_id=auth.user_id,
+            action="UPDATE_TITLE",
+            entity_type="title",
+            entity_id=str(title_id),
+            before=old_data,
+            after={
+                "name": payload.name,
+                "author": payload.author,
+                "description": payload.description,
+                "genre": payload.genre,
+                "publisher": payload.publisher,
+                "cover_url": normalized_cover_url
+            },
+            ip_address=None,
+            device_id=None,
+        )
+
     await event_publisher.publish_inventory_data_changed(reason="title_updated", branch_id=auth.branch_id)
     return success_response({"id": title_id})
 
@@ -1322,30 +1333,53 @@ async def delete_title(
     session: AsyncSession = Depends(get_db_session),
     event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
-    await session.execute(
-        text("UPDATE title SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
-        {"id": title_id}
-    )
-    await session.execute(
-        text("UPDATE volume SET deleted_at = CURRENT_TIMESTAMP WHERE title_id = :id"),
-        {"id": title_id}
-    )
-    await session.execute(
-        text("UPDATE item SET deleted_at = CURRENT_TIMESTAMP WHERE volume_id IN (SELECT id FROM volume WHERE title_id = :id)"),
-        {"id": title_id}
-    )
-    await session.commit()
-    await write_audit_log(
-        session=session,
-        actor_user_id=auth.user_id,
-        action="DELETE_TITLE",
-        entity_type="title",
-        entity_id=str(title_id),
-        before=None, # In case of delete, after is usually enough if it contains what was deleted or just name
-        after={"name": "Deleted title " + str(title_id)},
-        ip_address=None,
-        device_id=None,
-    )
+    async with session.begin():
+        # Kiểm tra có item đang rented/reserved không
+        active_check = await session.execute(
+            text("""
+                SELECT COUNT(*) AS cnt FROM item i
+                JOIN volume v ON v.id = i.volume_id
+                WHERE v.title_id = :tid
+                  AND i.status IN ('rented', 'reserved')
+                  AND i.deleted_at IS NULL
+            """),
+            {"tid": title_id},
+        )
+        active_count = int(active_check.scalar_one())
+
+        if active_count > 0:
+            raise AppError(
+                code="TITLE_HAS_ACTIVE_ITEMS",
+                message=f"Không thể xóa: có {active_count} sản phẩm đang được thuê hoặc giữ chỗ.",
+                status_code=status.HTTP_409_CONFLICT,
+            )
+
+        # An toàn → tiến hành soft delete
+        await session.execute(
+            text("UPDATE title SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
+            {"id": title_id}
+        )
+        await session.execute(
+            text("UPDATE volume SET deleted_at = CURRENT_TIMESTAMP WHERE title_id = :id"),
+            {"id": title_id}
+        )
+        await session.execute(
+            text("UPDATE item SET deleted_at = CURRENT_TIMESTAMP WHERE volume_id IN (SELECT id FROM volume WHERE title_id = :id)"),
+            {"id": title_id}
+        )
+
+        await write_audit_log(
+            session=session,
+            actor_user_id=auth.user_id,
+            action="DELETE_TITLE",
+            entity_type="title",
+            entity_id=str(title_id),
+            before=None,
+            after={"name": "Deleted title " + str(title_id)},
+            ip_address=None,
+            device_id=None,
+        )
+
     await event_publisher.publish_inventory_data_changed(reason="title_deleted", branch_id=auth.branch_id)
     return success_response({"deleted": True})
 
