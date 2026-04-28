@@ -22,6 +22,9 @@ from app.db.session import get_db_session
 from app.services import (
     EventPublisher,
     compute_sell_price,
+    compute_rent_price,
+    compute_deposit,
+    resolve_active_price_rule,
     get_cached_response,
     is_remote_image_url,
     save_cover_from_base64,
@@ -68,6 +71,8 @@ class InventoryItemListItem(BaseModel):
     name: str  # title name + volume number
     code: str  # sku or barcode
     price: int
+    rent_price: int | None = None
+    deposit_price: int | None = None
     stock_quantity: int | None = None
     status: str
     type: str
@@ -420,6 +425,8 @@ async def list_inventory_items(
     result = await session.execute(text(query_str), params)
     rows = result.mappings().all()
 
+    pricing_rule = await resolve_active_price_rule(session)
+
     items = [
         InventoryItemListItem(
             id=row["item_id"],
@@ -430,6 +437,16 @@ async def list_inventory_items(
                 condition_level=int(row["condition_level"]),
                 p_sell_new=int(row["p_sell_new"]),
             ),
+            rent_price=compute_rent_price(
+                condition_level=int(row["condition_level"]),
+                p_sell_new=int(row["p_sell_new"]),
+                k_rent=pricing_rule.k_rent,
+            ) if row["type"] == "rental" else None,
+            deposit_price=compute_deposit(
+                p_sell_new=int(row["p_sell_new"]),
+                k_deposit=pricing_rule.k_deposit,
+                d_floor=pricing_rule.d_floor,
+            ) if row["type"] == "rental" else None,
             stock_quantity=(
                 int(row["stock_quantity"])
                 if row.get("stock_quantity") is not None
@@ -1725,12 +1742,23 @@ async def auto_create_item(
     if not new_item:
         raise AppError(code="CREATE_FAILED", message="Không thể tạo item mới.", status_code=500)
 
+    pricing_rule = await resolve_active_price_rule(session)
     item_data = InventoryItemListItem(
         id=new_item["id"],
         volume_id=new_item["volume_id"],
         name=f"{new_item['title_name']} Tập {new_item['volume_number']}",
         code=new_item["id"],  # dùng chính id làm code
         price=compute_sell_price(condition_level=new_item["condition_level"], p_sell_new=new_item["p_sell_new"]),
+        rent_price=compute_rent_price(
+            condition_level=new_item["condition_level"],
+            p_sell_new=new_item["p_sell_new"],
+            k_rent=pricing_rule.k_rent,
+        ) if new_item["item_type"] == "rental" else None,
+        deposit_price=compute_deposit(
+            p_sell_new=new_item["p_sell_new"],
+            k_deposit=pricing_rule.k_deposit,
+            d_floor=pricing_rule.d_floor,
+        ) if new_item["item_type"] == "rental" else None,
         stock_quantity=1,
         status=new_item["status"],
         type=new_item["item_type"],

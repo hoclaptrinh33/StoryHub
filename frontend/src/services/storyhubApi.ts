@@ -200,6 +200,8 @@ export type InventoryItemListItem = {
   name: string;
   code: string;
   price: number;
+  rent_price?: number | null;
+  deposit_price?: number | null;
   stock_quantity?: number | null;
   status: string;
   type: "retail" | "rental";
