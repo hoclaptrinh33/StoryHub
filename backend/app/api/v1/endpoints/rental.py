@@ -847,17 +847,27 @@ async def create_rental_contract(
             device_id=device_id,
         )
 
-    envelope = success_response(
-        CreateRentalContractPayload(
-            contract_id=str(contract_id),
-            customer_id=str(payload.customer_id),
-            rent_date=now_iso,
-            due_date=due_date_iso,
-            deposit_total=deposit_total,
-            rental_items=rental_items,
+        # Build envelope + cache idempotency TRONG CÙNG transaction
+        envelope = success_response(
+            CreateRentalContractPayload(
+                contract_id=str(contract_id),
+                customer_id=str(payload.customer_id),
+                rent_date=now_iso,
+                due_date=due_date_iso,
+                deposit_total=deposit_total,
+                rental_items=rental_items,
+            )
         )
-    )
 
+        await store_cached_response(
+            session,
+            scope="rental.create_contract",
+            request_id=payload.request_id,
+            status_code=status.HTTP_200_OK,
+            payload=envelope.model_dump(),
+        )
+
+    # Post-commit: publish events (idempotent, OK nếu fail)
     for selected_item in selected_items:
         await event_publisher.publish_item_status_changed(
             item_id=str(selected_item["id"]),
@@ -868,26 +878,6 @@ async def create_rental_contract(
             changed_by=auth.user_id,
             branch_id=auth.branch_id,
         )
-
-    try:
-        async with session.begin():
-            await store_cached_response(
-                session,
-                scope="rental.create_contract",
-                request_id=payload.request_id,
-                status_code=status.HTTP_200_OK,
-                payload=envelope.model_dump(),
-            )
-    except IntegrityError:
-        await session.rollback()
-        cached = await get_cached_response(
-            session,
-            scope="rental.create_contract",
-            request_id=payload.request_id,
-        )
-        if cached is not None:
-            return cached.payload
-        raise
 
     return envelope
 
@@ -1009,36 +999,25 @@ async def extend_rental_contract(
             device_id=device_id,
         )
 
-    envelope = success_response(
-        ExtendRentalContractPayload(
-            contract_id=str(contract_id),
-            old_due_date=to_iso_z(old_due_date),
-            new_due_date=new_due_date_iso,
-            additional_fee=0,
-            additional_deposit=payload.additional_deposit,
-            status=next_status,
-        )
-    )
-
-    try:
-        async with session.begin():
-            await store_cached_response(
-                session,
-                scope="rental.extend_contract",
-                request_id=payload.request_id,
-                status_code=status.HTTP_200_OK,
-                payload=envelope.model_dump(),
+        # Build envelope + cache idempotency TRONG CÙNG transaction
+        envelope = success_response(
+            ExtendRentalContractPayload(
+                contract_id=str(contract_id),
+                old_due_date=to_iso_z(old_due_date),
+                new_due_date=new_due_date_iso,
+                additional_fee=0,
+                additional_deposit=payload.additional_deposit,
+                status=next_status,
             )
-    except IntegrityError:
-        await session.rollback()
-        cached = await get_cached_response(
+        )
+
+        await store_cached_response(
             session,
             scope="rental.extend_contract",
             request_id=payload.request_id,
+            status_code=status.HTTP_200_OK,
+            payload=envelope.model_dump(),
         )
-        if cached is not None:
-            return cached.payload
-        raise
 
     return envelope
 
@@ -1118,8 +1097,6 @@ async def return_rental_items(
         )
         contract_items = {str(row["item_id"]): dict(row) for row in rental_item_result.mappings()}
 
-        # rental_fee chỉ dùng để ghi log thống kê, KHÔNG tính vào total_fee
-        # vì khách đã trả tiền thuê lúc checkout rồi
         rental_fee = 0
         late_fee = 0
         damage_fee = 0
@@ -1143,10 +1120,12 @@ async def return_rental_items(
 
             rent_price = int(item_row["final_rent_price"])
             deposit = int(item_row["final_deposit"])
-            # Ghi nhận rental_fee vào log nhưng KHÔNG cộng vào phí tổng
             rental_fee += rent_price
             if delay_days > 0:
-                late_fee += delay_days * int(settings.overdue_fee_per_day)
+                item_late_fee = delay_days * int(settings.overdue_fee_per_day)
+                # Cap: phí trễ không vượt quá tiền cọc của item
+                item_late_fee = min(item_late_fee, deposit)
+                late_fee += item_late_fee
             damage_fee += _calculate_damage_fee(deposit, line.condition_after)
             if line.condition_after == "lost":
                 lost_fee += deposit
@@ -1199,9 +1178,7 @@ async def return_rental_items(
             )
             status_change_events.append((line.item_id, str(item_row["status"]), item_target_status))
 
-        # Chỉ tính phí trễ hạn và phí hư hỏng/mất vào tổng phí phải trừ vào cọc
-        # rental_fee đã được thu tại thời điểm checkout, không thu lại
-        total_fee = late_fee + damage_fee + lost_fee
+        total_fee = rental_fee + late_fee + damage_fee + lost_fee
         remaining_deposit_before = int(contract_row["remaining_deposit"])
         deducted_from_deposit = min(total_fee, remaining_deposit_before)
         remaining_debt = max(total_fee - remaining_deposit_before, 0)
@@ -1394,22 +1371,32 @@ async def return_rental_items(
             device_id=device_id,
         )
 
-    envelope = success_response(
-        ReturnRentalItemsPayload(
-            settlement_id=str(settlement_id),
-            contract_id=str(contract_id),
-            rental_fee=int(aggregated["rental_fee"]),
-            late_fee=int(aggregated["late_fee"]),
-            damage_fee=int(aggregated["damage_fee"]),
-            lost_fee=int(aggregated["lost_fee"]),
-            total_fee=int(aggregated["total_fee"]),
-            deducted_from_deposit=int(aggregated["deducted_from_deposit"]),
-            refund_to_customer=int(aggregated["refund_to_customer"]),
-            remaining_debt=int(aggregated["remaining_debt"]),
-            contract_status=contract_status,
+        # Build envelope + cache idempotency TRONG CÙNG transaction
+        envelope = success_response(
+            ReturnRentalItemsPayload(
+                settlement_id=str(settlement_id),
+                contract_id=str(contract_id),
+                rental_fee=int(aggregated["rental_fee"]),
+                late_fee=int(aggregated["late_fee"]),
+                damage_fee=int(aggregated["damage_fee"]),
+                lost_fee=int(aggregated["lost_fee"]),
+                total_fee=int(aggregated["total_fee"]),
+                deducted_from_deposit=int(aggregated["deducted_from_deposit"]),
+                refund_to_customer=int(aggregated["refund_to_customer"]),
+                remaining_debt=int(aggregated["remaining_debt"]),
+                contract_status=contract_status,
+            )
         )
-    )
 
+        await store_cached_response(
+            session,
+            scope="rental.return_items",
+            request_id=payload.request_id,
+            status_code=status.HTTP_200_OK,
+            payload=envelope.model_dump(),
+        )
+
+    # Post-commit: publish events (idempotent, OK nếu fail)
     for item_id, old_status, new_status in status_change_events:
         await event_publisher.publish_item_status_changed(
             item_id=item_id,
@@ -1430,26 +1417,6 @@ async def return_rental_items(
         settled_at=returned_at_iso,
         branch_id=auth.branch_id,
     )
-
-    try:
-        async with session.begin():
-            await store_cached_response(
-                session,
-                scope="rental.return_items",
-                request_id=payload.request_id,
-                status_code=status.HTTP_200_OK,
-                payload=envelope.model_dump(),
-            )
-    except IntegrityError:
-        await session.rollback()
-        cached = await get_cached_response(
-            session,
-            scope="rental.return_items",
-            request_id=payload.request_id,
-        )
-        if cached is not None:
-            return cached.payload
-        raise
 
     return envelope
 

@@ -56,11 +56,6 @@ const routes = [
         name: 'Settings',
         component: () => import('../views/Placeholder.vue'),
     },
-    // {
-    //     path: '/inventory',
-    //     name: 'Settings',
-    //     component: () => import('../views/inventory.vue'),
-    // },
 ]
 
 const router = createRouter({
