@@ -54,3 +54,6 @@ frontend/src-tauri/gen/
 # Agent Logs and Metadata
 brain/
 .gemini/
+
+# Backups
+backups/
