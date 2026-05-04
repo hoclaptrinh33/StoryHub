@@ -1,5 +1,6 @@
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8000";
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL;
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? DEFAULT_API_BASE_URL;
+
 
 type ErrorPayload = {
   code?: string;
@@ -270,17 +271,17 @@ export type VolumeMutateRequest = {
 export type ItemCreateRequest = {
   volume_id: number;
   id: string | null;
+  item_type?: string;  // "rental" or "retail"
   condition_level: number;
   notes: string | null;
   version_no: number;
-  request_id: string;
 };
 
 export type ItemUpdateRequest = {
   status: string;
+  item_type?: string | null;
   condition_level: number;
   notes: string | null;
-  request_id: string;
 };
 
 export type CreateVolumePayload = {
@@ -834,6 +835,7 @@ export async function login(payload: LoginRequest): Promise<LoginPayload> {
 export type TitleItem = {
   id: string;
   status: string;
+  item_type: 'rental' | 'retail';
   condition_level: number;
   notes: string | null;
   has_barcode: boolean;
@@ -865,71 +867,71 @@ export type TitleEntry = {
   volumes: TitleVolume[];
 };
 
-export async function createTitle(payload: TitleMutateRequest): Promise<{ id: number }> {
-  return request<{ id: number }>("/api/v1/kho/titles", {
+export async function createTitle(payload: TitleMutateRequest, token = "manager-demo"): Promise<{ id: number }> {
+  return request<{ id: number }>("/api/v1/inventory/titles", {
     method: 'POST',
     body: JSON.stringify(payload),
-    token: "manager-demo",
+    token,
   });
 }
 
-export async function updateTitle(id: number, payload: TitleMutateRequest): Promise<void> {
-  return request<void>(`/api/v1/kho/titles/${id}`, {
+export async function updateTitle(id: number, payload: TitleMutateRequest, token = "manager-demo"): Promise<void> {
+  return request<void>(`/api/v1/inventory/titles/${id}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
-    token: "manager-demo",
+    token,
   });
 }
 
-export async function deleteTitle(id: number): Promise<void> {
-  return request<void>(`/api/v1/kho/titles/${id}`, {
+export async function deleteTitle(id: number, token = "manager-demo"): Promise<void> {
+  return request<void>(`/api/v1/inventory/titles/${id}`, {
     method: 'DELETE',
-    token: "manager-demo",
+    token,
   });
 }
 
-export async function updateVolume(id: number, payload: VolumeMutateRequest): Promise<void> {
-  return request<void>(`/api/v1/kho/volumes/${id}`, {
+export async function updateVolume(id: number, payload: VolumeMutateRequest, token = "manager-demo"): Promise<void> {
+  return request<void>(`/api/v1/inventory/volumes/${id}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
-    token: "manager-demo",
+    token,
   });
 }
 
-export async function deleteVolume(id: number): Promise<void> {
-  return request<void>(`/api/v1/kho/volumes/${id}`, {
+export async function deleteVolume(id: number, token = "manager-demo"): Promise<void> {
+  return request<void>(`/api/v1/inventory/volumes/${id}`, {
     method: 'DELETE',
-    token: "manager-demo",
+    token,
   });
 }
 
-export async function createItem(payload: ItemCreateRequest): Promise<{ id: string }> {
-  return request<{ id: string }>("/api/v1/kho/items", {
+export async function createItem(payload: ItemCreateRequest, token = "manager-demo"): Promise<{ id: string }> {
+  return request<{ id: string }>("/api/v1/inventory/items", {
     method: 'POST',
     body: JSON.stringify(payload),
-    token: "manager-demo",
+    token,
   });
 }
 
-export async function updateItem(id: string, payload: ItemUpdateRequest): Promise<void> {
-  return request<void>(`/api/v1/kho/items/${id}`, {
+export async function updateItem(id: string, payload: ItemUpdateRequest, token = "manager-demo"): Promise<void> {
+  return request<void>(`/api/v1/inventory/items/${id}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
-    token: "manager-demo",
+    token,
   });
 }
 
-export async function deleteItem(id: string): Promise<void> {
-  return request<void>(`/api/v1/kho/items/${id}`, {
+export async function deleteItem(id: string, token = "manager-demo"): Promise<void> {
+  return request<void>(`/api/v1/inventory/items/${id}`, {
     method: 'DELETE',
-    token: "manager-demo",
+    token,
   });
 }
 
 export async function fetchTitlesWithVolumes(q?: string, token = "manager-demo"): Promise<TitleEntry[]> {
   const path = q
-    ? `/api/v1/kho/titles?q=${encodeURIComponent(q)}`
-    : "/api/v1/kho/titles";
+    ? `/api/v1/inventory/titles?q=${encodeURIComponent(q)}`
+    : "/api/v1/inventory/titles";
   return request<TitleEntry[]>(path, { method: "GET", token });
 }
 

@@ -551,6 +551,7 @@ import { useScannerStore } from "../stores/scanner";
 import DefaultLayout from "../components/layout/defaultLayout.vue";
 import BaseModal from "../components/layout/BaseModal.vue";
 import HotkeyBar, { type HotkeyItem } from "../components/layout/HotkeyBar.vue";
+import { useAuthStore } from '../stores/auth';
 import {
   StoryHubApiError,
   buildRequestId,
@@ -598,6 +599,8 @@ interface InvoiceTarget {
 
 const addNotification = inject("addNotification") as (type: string, msg: string) => void;
 
+const authStore = useAuthStore();
+const token = computed(() => authStore.token ?? 'cashier-demo');
 const scannerStore = useScannerStore();
 const route = useRoute();
 const router = useRouter();
@@ -705,8 +708,8 @@ const hotkeyItems: HotkeyItem[] = [
   { key: "Delete", label: "Xóa dòng chọn" },
 ];
 
-const K_RENT_DAILY = 0.02;
-const K_DEPOSIT = 0.8;
+const K_RENT_DAILY = 0.05;   
+const K_DEPOSIT = 0.3;
 const D_FLOOR = 1000;
 
 const resolveRentPrice = (sellPrice: number, days: number) => {
@@ -1280,6 +1283,14 @@ const viewPreviousInvoice = () => {
 };
 
 const confirmCheckout = async () => {
+  if (!token.value || token.value === 'cashier-demo') {
+  addNotification('error', 'Bạn chưa đăng nhập hoặc phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại.');
+  isSubmittingCheckout.value = false;
+  return;
+}
+console.log('🔑 Token đang dùng:', token.value);
+console.log('👤 User role:', authStore.user?.role);
+console.log('📜 User scopes:', authStore.user?.scopes);
   if (!canSubmitCheckout.value) {
     setRecoverableError(
       "Thiếu thông tin phiên giao dịch",
@@ -1333,7 +1344,7 @@ const confirmCheckout = async () => {
       split_payments: getSplitPaymentsPayload(),
       rental_days: Math.max(1, rentalDays.value),
       request_id: buildRequestId("checkout-unified"),
-    });
+    },token.value);
 
     let successMessage = "Thanh toán thành công. ";
     if (response.order_id) {

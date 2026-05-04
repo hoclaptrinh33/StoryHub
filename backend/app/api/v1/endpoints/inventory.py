@@ -867,7 +867,17 @@ async def create_volume(
                     "vid": volume_id
                 }
             )
-
+                    # Tự động tạo các item retail dựa trên retail_stock
+        if payload.retail_stock > 0:
+            for _ in range(payload.retail_stock):
+                item_id = f"SEL-{volume_id}-{uuid.uuid4().hex[:6].upper()}"
+                await session.execute(
+                    text("""
+                        INSERT INTO item (id, volume_id, status, item_type, condition_level, health_percent, version_no)
+                        VALUES (:id, :vid, 'available', 'retail', 100, 100, 1)
+                    """),
+                    {"id": item_id, "vid": volume_id}
+                )
         # Ghi log lịch sử kho chuyên biệt
         await write_inventory_log(
             session,
@@ -1058,6 +1068,7 @@ async def update_volume_price(
 class TitleItemRow(BaseModel):
     id: str
     status: str
+    item_type: str
     condition_level: int
     notes: str | None
     has_barcode: bool  # True = có mã vạch thật → được phép thuê
@@ -1142,7 +1153,7 @@ async def list_titles_with_volumes(
         vol_id_placeholders = ",".join(str(i) for i in volume_ids)
         item_result = await session.execute(
             text(f"""
-                SELECT id, volume_id, status, condition_level, notes, version_no, reserved_at, reservation_expire_at
+                SELECT id, volume_id, status, item_type, condition_level, notes, version_no, reserved_at, reservation_expire_at
                 FROM item
                 WHERE volume_id IN ({vol_id_placeholders}) AND deleted_at IS NULL
                 ORDER BY volume_id ASC, id ASC
@@ -1158,6 +1169,7 @@ async def list_titles_with_volumes(
             row = TitleItemRow(
                 id=item_id,
                 status=str(ir["status"]),
+                item_type=str(ir["item_type"]),
                 condition_level=int(ir["condition_level"]),
                 notes=ir["notes"],
                 has_barcode=is_real_barcode,
@@ -1218,6 +1230,7 @@ class TitleMutateRequest(BaseModel):
     description: str | None = None
     genre: str | None = None
     publisher: str | None = None
+    cover_url: str | None = None
 
 @router.post("/titles")
 async def create_new_title(
@@ -1366,6 +1379,7 @@ async def delete_title(
     request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
     ip_addr, device = get_request_meta(request)
     async with session.begin():
@@ -1422,6 +1436,7 @@ class VolumeMutateRequest(BaseModel):
 async def update_volume(
     volume_id: int,
     payload: VolumeMutateRequest,
+    request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
     event_publisher: EventPublisher = Depends(get_event_publisher),
@@ -1478,6 +1493,7 @@ async def update_volume(
 @router.delete("/volumes/{volume_id}")
 async def delete_volume(
     volume_id: int,
+    request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
     event_publisher: EventPublisher = Depends(get_event_publisher),
@@ -1529,12 +1545,14 @@ async def delete_volume(
 class ItemCreateRequest(BaseModel):
     volume_id: int
     id: str | None = None # barcode. If none, auto-generate RNT-{uuid}
+    item_type: str = "rental"  # "rental" or "retail"
     condition_level: int = Field(ge=0, le=100, default=100)
     notes: str | None = None
     version_no: int = Field(default=1)
 
 class ItemUpdateRequest(BaseModel):
     status: str
+    item_type: str | None = None  # optional, keep existing if None
     condition_level: int = Field(ge=0, le=100)
     notes: str | None = None
 
@@ -1544,6 +1562,7 @@ async def create_item(
     payload: ItemCreateRequest,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session), # noqa: B008
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
     
     if payload.id is not None and str(payload.id).strip():
@@ -1604,6 +1623,7 @@ async def create_item(
 async def update_item(
     item_id: str,
     payload: ItemUpdateRequest,
+    request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
     event_publisher: EventPublisher = Depends(get_event_publisher),
@@ -1641,11 +1661,12 @@ async def update_item(
     # Sync retail_stock (get volume_id first)
         vol_id_res = await session.execute(text("SELECT volume_id FROM item WHERE id = :id"), {"id": item_id})
         vol_id = vol_id_res.scalar()
-        if vol_id:
-            await session.execute(
-                text("UPDATE volume SET retail_stock = (SELECT COUNT(*) FROM item WHERE volume_id = :vid AND item_type = 'retail' AND deleted_at IS NULL) WHERE id = :vid"),
-                {"vid": vol_id}
-            )
+        if payload.item_type is not None and old_row["item_type"] == "retail" and payload.item_type == "rental":
+            if vol_id:
+                await session.execute(
+                    text("UPDATE volume SET retail_stock = (SELECT COUNT(*) FROM item WHERE volume_id = :vid AND item_type = 'retail' AND deleted_at IS NULL) WHERE id = :vid"),
+                    {"vid": vol_id}
+                )
 
     
         await write_audit_log(
@@ -1676,6 +1697,7 @@ async def update_item(
 @router.delete("/items/{item_id}")
 async def delete_item(
     item_id: str,
+    request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
     event_publisher: EventPublisher = Depends(get_event_publisher),

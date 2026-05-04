@@ -54,6 +54,23 @@ _ROLE_SCOPES: dict[str, tuple[str, ...]] = {
         "admin:read",    # Owner-only: xem dữ liệu nhạy cảm
         "admin:write",   # Owner-only: thực hiện thao tác quản trị
     ),
+    "admin": (
+        "inventory:read",
+        "inventory:reserve",
+        "inventory:write",
+        "crm:read",
+        "crm:write",
+        "metadata:read",
+        "pos:write",
+        "pos:refund",
+        "report:read",
+        "rental:write",
+        "rental:return",
+        "rental:extend",
+        "system:backup",
+        "admin:read",
+        "admin:write",
+    ),
 }
 
 _DEMO_TOKEN_PAYLOADS: dict[str, dict[str, str | list[str]]] = {
@@ -94,6 +111,8 @@ class AuthContext:
             )
 
     def require_role(self, *roles: str) -> None:
+        if self.role in {"admin", "owner"}:
+            return
         if self.role not in roles:
             raise AppError(
                 code="AUTH_ROLE_DENIED",

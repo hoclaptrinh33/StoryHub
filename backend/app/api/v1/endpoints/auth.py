@@ -75,6 +75,13 @@ async def login(
              "pos:write", "pos:refund", "report:read",
              "rental:write", "rental:return", "rental:extend", "system:backup",
              "admin:read", "admin:write",
+        ],
+        "admin": [
+             "inventory:read", "inventory:reserve", "inventory:write",
+             "crm:read", "crm:write", "metadata:read",
+             "pos:write", "pos:refund", "report:read",
+             "rental:write", "rental:return", "rental:extend", "system:backup",
+             "admin:read", "admin:write",
         ]
     }
     

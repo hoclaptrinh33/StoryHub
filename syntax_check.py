@@ -1,17 +1,15 @@
-import py_compile
-import os
+import sqlite3
+conn = sqlite3.connect('backend/storyhub.db')
+cursor = conn.cursor()
 
-files = [
-    r'backend\app\api\v1\endpoints\inventory.py',
-    r'backend\app\api\v1\endpoints\checkout.py',
-    r'backend\app\api\v1\endpoints\pos.py'
-]
+print("=== USERS ===")
+for row in cursor.execute("SELECT id, username, role FROM user"):
+    print(row)
 
-print("--- Syntax Check ---")
-for f in files:
-    try:
-        py_compile.compile(f, doraise=True)
-        print(f"{f}: OK")
-    except Exception as e:
-        print(f"{f}: ERROR")
-        print(e)
+cursor.execute("INSERT OR IGNORE INTO customer (id, name, phone, membership_level) VALUES (1, 'Khách lẻ', '0000000000', 'standard');")
+conn.commit()
+print("\n=== CUSTOMERS ===")
+for row in cursor.execute("SELECT id, name, phone FROM customer LIMIT 5"):
+    print(row)
+
+conn.close()

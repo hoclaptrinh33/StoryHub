@@ -326,3 +326,67 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime, nullable=True)
+
+class Promotion(Base):
+    __tablename__ = 'promotion'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), nullable=False)
+
+    discount_type = Column(
+        String(20),
+        nullable=False
+    )  # 'percent' hoặc 'amount'
+
+    discount_value = Column(
+        Integer,
+        nullable=False
+    )  # percent (0-100) hoặc số tiền giảm (VND)
+
+    start_date = Column(DateTime, nullable=False)
+    end_date = Column(DateTime, nullable=False)
+
+    is_active = Column(Boolean, default=True)
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow
+    )
+
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow
+    )
+class PromotionItem(Base):
+    __tablename__ = 'promotion_item'
+
+    __table_args__ = (
+        CheckConstraint(
+            "target_type IN ('volume', 'title')",
+            name='check_target_type'
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+
+    promotion_id = Column(
+        Integer,
+        ForeignKey('promotion.id', ondelete='CASCADE'),
+        nullable=False
+    )
+
+    target_type = Column(
+        String(20),
+        nullable=False
+    )  # 'volume' hoặc 'title'
+
+    target_id = Column(
+        Integer,
+        nullable=False
+    )  # id của volume hoặc title
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow
+    )

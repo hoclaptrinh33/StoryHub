@@ -39,7 +39,7 @@ const routes = [
     {
         path: '/kho',
         name: 'Inventory',
-        component: () => import('../views/inventory.vue'),
+        component: () => import('../views/manager_title.vue'),
     },
     {
         path: '/khach-hang',
