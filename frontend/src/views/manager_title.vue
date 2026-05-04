@@ -291,7 +291,7 @@
           </div>
           <div class="filter-group">
             <label>Từ ngày</label>
-            <input type="date" v-model="statsFilter.fromDate" class="glass-input" />
+            <input type="date" v-model="statsFilter.fromDate" class="glass-input"  />
           </div>
           <div class="filter-group">
             <label>Đến ngày</label>
@@ -354,7 +354,7 @@
             <div class="table-header">
               <h3>Chi tiết biến động</h3>
               <div class="table-controls">
-                <input type="text" v-model="tableSearch" placeholder="🔍 Lọc theo thời gian..." class="table-search" />
+                <input type="month" v-model="tableSearch" placeholder="🔍 Lọc theo thời gian..." class="table-search" />
                 <div class="pagination" v-if="totalPages > 1">
                   <button @click="currentPage--" :disabled="currentPage === 1">‹</button>
                   <span>Trang {{ currentPage }} / {{ totalPages }}</span>
@@ -1454,17 +1454,13 @@ const formatVND = (val: number) => {
 }
 /* ─── Input Date (lịch) ───────────────────────────────────────────────── */
 .glass-input[type="date"] {
-  appearance: none;
-  -webkit-appearance: none;
+  position: relative;
   background: white;
   border: 1px solid #e2e8f0;
   border-radius: 60px;
-  padding: 0.8rem 1.2rem;
+  padding: 0.8rem 2.8rem 0.8rem 1.2rem; /* chừa chỗ icon */
   font-size: 0.9rem;
-  font-family: inherit;
   color: #1e293b;
-  transition: all 0.2s ease;
-  cursor: pointer;
   width: 100%;
 }
 
@@ -1482,8 +1478,10 @@ const formatVND = (val: number) => {
 
 /* Tùy chỉnh icon lịch trên Chrome/Edge */
 .glass-input[type="date"]::-webkit-calendar-picker-indicator {
+   position: absolute;
+   right: 12px;
   background: transparent;
-  color: #64748b;
+  color: #4d8de8;
   cursor: pointer;
   padding: 6px;
   border-radius: 30px;
@@ -1491,7 +1489,9 @@ const formatVND = (val: number) => {
 }
 
 .glass-input[type="date"]::-webkit-calendar-picker-indicator:hover {
-  background: #e2e8f0;
+  background: #c1d3eb;
+  color: #4d8de8;
+
 }
 
 /* Khi chưa có giá trị (hiển thị placeholder ảo) */
