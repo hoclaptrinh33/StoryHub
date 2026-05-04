@@ -1179,7 +1179,7 @@ async def list_titles_with_volumes(
                 reservation_expire_at=str(ir["reservation_expire_at"]) if ir["reservation_expire_at"] else None,
             )
             items_by_volume.setdefault(vid, []).append(row)
-            if str(ir["status"]) == "available":
+            if str(ir["status"]) == "available" and str(ir["item_type"]) == "rental":
                 rental_count_by_volume[vid] = rental_count_by_volume.get(vid, 0) + 1
 
     # 4. Ghép kết quả (Sử dụng pricing_rule từ database)

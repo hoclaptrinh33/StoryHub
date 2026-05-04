@@ -4,6 +4,7 @@ import { ref, computed, inject, onMounted,onBeforeUnmount, watch } from 'vue';
 import { 
   API_BASE_URL,
   fetchTitlesWithVolumes, 
+  fetchInventoryLogs,
   createTitle as apiCreateTitle,
   updateTitle as apiUpdateTitle,
   deleteTitle as apiDeleteTitle,
@@ -18,6 +19,7 @@ import {
   autofillTitleMetadata,
   StoryHubApiError,
   importCoverImage,
+  type InventoryLogItem,
 } from '../services/storyhubApi';
 import { useAuthStore } from '../stores/auth';
 import { useScannerStore } from '../stores/scanner';
@@ -30,7 +32,47 @@ import BaseModal from '../components/layout/BaseModal.vue'
 const authStore = useAuthStore();
 const token = computed(() => authStore.token ?? 'manager-demo');
 
+
+//------- history ---------
+const logs = ref<InventoryLogItem[]>([]);
+const isLogsLoading = ref(false);
+
+// Helper functions for history
+const formatDateTime = (dateStr: string) => {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  return d.toLocaleString('vi-VN');
+};
+const getLogIcon = (actionType: string) => {
+  switch (actionType) {
+    case 'STOCK_IN': return 'add_circle';
+    case 'CONVERT': return 'sync_alt';
+    case 'PRICE_CHANGE': return 'sell';
+    case 'ADJUST': return 'tune';
+    default: return 'history';
+  }
+};
+const formatActionType = (actionType: string) => {
+  switch (actionType) {
+    case 'STOCK_IN': return 'Đã nhập thêm';
+    case 'CONVERT': return 'Đã chuyển loại';
+    case 'PRICE_CHANGE': return 'Đã đổi giá';
+    case 'ADJUST': return 'Đã điều chỉnh';
+    default: return actionType;
+  }
+};
+const loadLogs = async () => {
+  isLogsLoading.value = true;
+  try {
+    logs.value = await fetchInventoryLogs(); // Nếu API cần token, truyền token.value
+  } catch (error: any) {
+    addNotification?.('error', error.message || 'Không thể nạp lịch sử kho.');
+  } finally {
+    isLogsLoading.value = false;
+  }
+};
 // ─── Modal state ─────────────────────────────────────────────────────────────
+const activeTab = ref<"items" | "history">("items");
 const isModalOpen = ref(false);
 const isItemsModalOpen = ref(false);
 const isAddBookModalOpen = ref(false);
@@ -228,6 +270,11 @@ onMounted(() => {
     },
     { immediate: true }
   );
+  watch(activeTab, (newTab) => {
+  if (newTab === 'history') {
+    loadLogs();
+  }
+});
 });
 onBeforeUnmount(() => {
   if (stopScannerWatch) stopScannerWatch();
@@ -549,157 +596,221 @@ const formatVND = (val: number) => {
         <span>Đang tải dữ liệu...</span>
       </div>
 
-      <!-- Header Card -->
-      <div class="header-card">
-        <div class="header-left">
-          <h1 class="page-title">📚 Quản lý đầu truyện</h1>
-          <p class="page-subtitle">Danh mục sách, tập, bản sao và chuyển đổi kho</p>
-        </div>
-        <div class="header-actions">
-          <div class="search-group">
-            <input v-model="searchQuery" type="text" placeholder="🔍 Tìm kiếm truyện, ISBN..." class="search-input" />
-          </div>
-          <div class="filters">
-            <select v-model="filterAuthor" class="filter-select"><option value="">Tác giả</option><option v-for="a in authors" :key="a" :value="a">{{ a }}</option></select>
-            <select v-model="filterGenre" class="filter-select"><option value="">Thể loại</option><option v-for="g in genres" :key="g" :value="g">{{ g }}</option></select>
-            <select v-model="filterPublisher" class="filter-select"><option value="">Nhà xuất bản</option><option v-for="p in publishers" :key="p" :value="p">{{ p }}</option></select>
-          </div>
-          <div class="action-buttons">
-            <button class="btn-icon" @click="() => loadTitles()" title="Làm mới"><span class="material-icons">refresh</span></button>
-            <button class="btn-primary" @click="openAddBook"><span class="material-icons">library_add</span> Đầu truyện mới</button>
-            <button class="btn-secondary" @click="openScanModal()"><span class="material-icons">qr_code_scanner</span> Quét ISBN</button>
-          </div>
-        </div>
+      <!-- Tabs -->
+      <div class="view-tabs">
+        <button
+          type="button"
+          :class="['tab-item', { active: activeTab === 'items' }]"
+          @click="activeTab = 'items'"
+        >
+          <span class="material-icons">inventory_2</span>
+          Danh mục kho
+        </button>
+        <button
+          type="button"
+          :class="['tab-item', { active: activeTab === 'history' }]"
+          @click="activeTab = 'history'"
+        >
+          <span class="material-icons">history</span>
+          Lịch sử cập nhật
+        </button>
       </div>
 
-      <!-- Books Grid -->
-      <div class="books-grid">
-        <div v-for="book in filteredBooks" :key="book.id" class="book-card" @click="openVolumeModal(book)">
-          <div class="book-cover"><img :src="book.image" :alt="book.name" /></div>
-          <div class="book-info">
-            <div class="book-title">{{ book.name }}</div>
-            <div class="book-meta"><span class="badge-author">✍️ {{ book.author || '?' }}</span><span class="badge-genre">{{ book.genre || 'Chưa phân loại' }}</span></div>
-            <div class="book-publisher">{{ book.publisher }}</div>
-            <div class="book-code">Mã: {{ book.code }}</div>
-            <div class="book-desc">{{ book.description.slice(0, 80) }}...</div>
+      <!-- Nội dung Items -->
+      <div v-if="activeTab === 'items'">
+        <div class="header-card">
+          <div class="header-left">
+            <h1 class="page-title">📚 Quản lý đầu truyện</h1>
+            <p class="page-subtitle">Danh mục sách, tập, bản sao và chuyển đổi kho</p>
           </div>
-          <div class="book-actions" @click.stop>
-            <button class="icon-btn edit" @click="openEditBook(book)"><span class="material-icons">edit</span></button>
-            <button class="icon-btn delete" @click="deleteBook(book.id)"><span class="material-icons">delete</span></button>
+          <div class="header-actions">
+            <div class="search-group">
+              <input v-model="searchQuery" type="text" placeholder="🔍 Tìm kiếm truyện, ISBN..." class="search-input" />
+            </div>
+            <div class="filters">
+              <select v-model="filterAuthor" class="filter-select"><option value="">Tác giả</option><option v-for="a in authors" :key="a" :value="a">{{ a }}</option></select>
+              <select v-model="filterGenre" class="filter-select"><option value="">Thể loại</option><option v-for="g in genres" :key="g" :value="g">{{ g }}</option></select>
+              <select v-model="filterPublisher" class="filter-select"><option value="">Nhà xuất bản</option><option v-for="p in publishers" :key="p" :value="p">{{ p }}</option></select>
+            </div>
+            <div class="action-buttons">
+              <button class="btn-icon" @click="() => loadTitles()" title="Làm mới"><span class="material-icons">refresh</span></button>
+              <button class="btn-primary" @click="openAddBook"><span class="material-icons">library_add</span> Đầu truyện mới</button>
+              <button class="btn-secondary" @click="openScanModal()"><span class="material-icons">qr_code_scanner</span> Quét ISBN</button>
+            </div>
           </div>
         </div>
-        <div v-if="filteredBooks.length === 0" class="empty-state"><span class="material-icons">book_stack</span><p>Không tìm thấy đầu truyện nào.</p></div>
+
+        <!-- Books Grid -->
+        <div class="books-grid">
+          <div v-for="book in filteredBooks" :key="book.id" class="book-card" @click="openVolumeModal(book)">
+            <div class="book-cover"><img :src="book.image" :alt="book.name" /></div>
+            <div class="book-info">
+              <div class="book-title">{{ book.name }}</div>
+              <div class="book-meta"><span class="badge-author">✍️ {{ book.author || '?' }}</span><span class="badge-genre">{{ book.genre || 'Chưa phân loại' }}</span></div>
+              <div class="book-publisher">{{ book.publisher }}</div>
+              <div class="book-code">Mã: {{ book.code }}</div>
+              <div class="book-desc">{{ book.description.slice(0, 80) }}...</div>
+            </div>
+            <div class="book-actions" @click.stop>
+              <button class="icon-btn edit" @click="openEditBook(book)"><span class="material-icons">edit</span></button>
+              <button class="icon-btn delete" @click="deleteBook(book.id)"><span class="material-icons">delete</span></button>
+            </div>
+          </div>
+          <div v-if="filteredBooks.length === 0" class="empty-state"><span class="material-icons">book_stack</span><p>Không tìm thấy đầu truyện nào.</p></div>
+        </div>
+
+        <!-- MODAL: Volumes -->
+        <BaseModal :is-open="isModalOpen" :title="selectedBook?.name" @close="isModalOpen = false" custom-class="modal-large">
+          <div class="volume-table-wrapper">
+            <table class="volume-table">
+              <thead><tr><th>Tập</th><th>ISBN</th><th>Giá bán</th><th>Giá thuê</th><th>Tồn kho</th><th>Số lượng thuê</th></tr></thead>
+              <tbody>
+                <tr v-for="vol in selectedBook?.volumes" :key="vol.id" @click="openItemsModal(vol)">
+                  <td>Tập {{ vol.volume }}</td>
+                  <td>{{ vol.isbn || '—' }}</td>
+                  <td>{{ formatVND(vol.price) }}</td>
+                  <td>{{ formatVND(vol.rent_price) }}</td>
+                  <td>{{ vol.so_luong }}</td>
+                  <td>{{ vol.rental_item_count }}</td>
+                  <td class="actions" @click.stop>
+                    <button class="icon-small restock" @click="openRestockVolume(vol)" title="Bổ sung"><span class="material-icons">add_box</span></button>
+                    <button class="icon-small edit" @click="openEditVolume(vol)"><span class="material-icons">edit</span></button>
+                    <button class="icon-small delete" @click="deleteVolume(selectedBook, vol.id)"><span class="material-icons">delete</span></button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <template #footer><button class="btn-secondary" @click="isModalOpen = false">Đóng</button><button class="btn-primary" @click="openAddVolume">+ Thêm tập mới</button></template>
+        </BaseModal>
+
+        <!-- MODAL: Items -->
+        <BaseModal :is-open="isItemsModalOpen" :title="`${selectedBook?.name} - Tập ${selectedVolume?.volume}`" @close="isItemsModalOpen = false" custom-class="modal-extra-large">
+          <div class="items-table-wrapper">
+            <table class="items-table">
+              <thead><tr><th>Mã vạch</th><th>Loại</th><th>Trạng thái</th><th>Tình trạng</th><th>Ghi chú</th><th>Phiên bản</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="it in selectedVolume?.items" :key="it.id">
+                  <td class="code-cell">{{ it.id }}</td>
+                  <td><span :class="['type-badge', it.item_type === 'retail' ? 'retail' : 'rental']">{{ it.type_label }}</span></td>
+                  <td>{{ getStatusText(it.status) }}</td>
+                  <td>{{ it.condition }}</td>
+                  <td>{{ it.note || '—' }}</td>
+                  <td>{{ it.version }}</td>
+                  <td class="actions">
+                    <button class="icon-small edit" @click="openEditItem(it)"><span class="material-icons">edit</span></button>
+                    <button class="icon-small delete" @click="deleteItem(selectedVolume, it.id)"><span class="material-icons">delete</span></button>
+                    <button v-if="it.item_type === 'retail'" class="icon-small convert" @click="convertItemToRental(it)" title="Chuyển thuê"><span class="material-icons">sync_alt</span></button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <template #footer>
+            <button class="btn-secondary" @click="isItemsModalOpen = false">Đóng</button>
+            <button class="btn-primary" @click="openConvertRental" v-if="selectedVolume?.retail_stock > 0">Chuyển thuê (tồn: {{ selectedVolume?.retail_stock }})</button>
+            <button class="btn-primary" @click="openAddItem">+ Thêm bản sao mới</button>
+          </template>
+        </BaseModal>
+
+        <!-- MODAL: Book (Add/Edit) -->
+        <BaseModal :is-open="isAddBookModalOpen || isEditBookModalOpen" :title="isEditBookModalOpen ? 'Sửa thông tin truyện' : 'Thêm truyện mới'" @close="isAddBookModalOpen = false; isEditBookModalOpen = false">
+          <div class="form-grid">
+            <div class="form-group"><label>Mã truyện</label><input v-model="formBook.code" type="text" placeholder="TR001" /></div>
+            <div class="form-group"><label>Tên truyện *</label><input v-model="formBook.name" type="text" placeholder="Nhập tên truyện..." /></div>
+            <div class="form-group"><label>Tác giả</label><input v-model="formBook.author" type="text" placeholder="Nhập tên tác giả..." /></div>
+            <div class="form-group"><label>Thể loại</label><input v-model="formBook.genre" type="text" placeholder="Shonen, Drama..." /></div>
+            <div class="form-group"><label>Nhà xuất bản</label><input v-model="formBook.publisher" type="text" placeholder="Nhập tên NXB..." /></div>
+            <div class="form-group full-width"><label>Mô tả</label><textarea v-model="formBook.description" rows="3"></textarea></div>
+          </div>
+          <template #footer><button class="btn-secondary" @click="isAddBookModalOpen = false; isEditBookModalOpen = false">Hủy</button><button class="btn-primary" @click="saveBook">{{ isEditBookModalOpen ? 'Cập nhật' : 'Thêm mới' }}</button></template>
+        </BaseModal>
+
+        <!-- MODAL: Volume (Add/Edit) -->
+        <BaseModal :is-open="isAddVolumeModalOpen || isEditVolumeModalOpen" :title="isEditVolumeModalOpen ? 'Sửa tập truyện' : 'Thêm tập mới'" @close="isAddVolumeModalOpen = false; isEditVolumeModalOpen = false">
+          <div class="form-grid">
+            <div class="form-group"><label>ISBN</label><input v-model="formVolume.isbn" type="text" placeholder="978-..." /></div>
+            <div class="form-group"><label>Tập số</label><input v-model="formVolume.volume" type="text" placeholder="105" /></div>
+            <div class="form-group"><label>Số lượng</label><input v-model="formVolume.so_luong" type="number" /></div>
+            <div class="form-group"><label>Giá bán (VND)</label><input v-model="formVolume.price" type="text" placeholder="20.000đ" /></div>
+            <div class="form-group"><label>Giá thuê (VND/ngày)</label><input v-model="formVolume.rent_price" type="text" placeholder="5.000đ" /></div>
+          </div>
+          <template #footer><button class="btn-secondary" @click="isAddVolumeModalOpen = false; isEditVolumeModalOpen = false">Hủy</button><button class="btn-primary" @click="saveVolume">{{ isEditVolumeModalOpen ? 'Cập nhật' : 'Thêm mới' }}</button></template>
+        </BaseModal>
+
+        <!-- MODAL: Item (Add/Edit) -->
+        <BaseModal :is-open="isAddItemModalOpen || isEditItemModalOpen" :title="isEditItemModalOpen ? 'Sửa bản sao' : 'Thêm bản sao mới'" @close="isAddItemModalOpen = false; isEditItemModalOpen = false">
+          <div class="form-grid">
+            <div class="form-group" v-if="isEditItemModalOpen"><label>Mã vạch</label><input v-model="formItem.id" type="text" disabled /></div>
+            <div class="form-group"><label>Loại hàng</label><select v-model="formItem.item_type"><option value="rental">Sách Thuê</option><option value="retail">Sách Bán</option></select></div>
+            <div class="form-group"><label>Trạng thái</label><select v-model="formItem.status"><option>Có sẵn</option><option>Đã thuê</option><option>Bảo trì</option></select></div>
+            <div class="form-group"><label>Tình trạng</label><input v-model="formItem.condition" type="text" placeholder="Mới, Cũ..." /></div>
+            <div class="form-group full-width"><label>Ghi chú</label><input v-model="formItem.note" type="text" /></div>
+          </div>
+          <template #footer><button class="btn-secondary" @click="isAddItemModalOpen = false; isEditItemModalOpen = false">Hủy</button><button class="btn-primary" @click="saveItem">{{ isEditItemModalOpen ? 'Cập nhật' : 'Thêm mới' }}</button></template>
+        </BaseModal>
+
+        <!-- MODAL: Convert to Rental -->
+        <BaseModal :is-open="isConvertRentalModalOpen" title="Chuyển sang truyện thuê" @close="isConvertRentalModalOpen = false">
+          <div class="form-grid"><div class="form-group full-width"><label>Số lượng muốn chuyển từ kho bán</label><input v-model.number="formConvert.quantity" type="number" min="1" :max="selectedVolume?.retail_stock" /><small class="hint">Hành động này sẽ trừ hàng tồn bán và tạo mã vạch bản sao mới.</small></div></div>
+          <template #footer><button class="btn-secondary" @click="isConvertRentalModalOpen = false">Hủy</button><button class="btn-primary" @click="saveConvertRental">Xác nhận chuyển</button></template>
+        </BaseModal>
+
+        <!-- MODAL: Scan ISBN -->
+        <BaseModal :is-open="isScanModalOpen" title="Nhập nhanh qua ISBN" @close="isScanModalOpen = false">
+          <div class="form-grid">
+            <div class="form-group full-width"><label>Mã ISBN</label><div class="isbn-input-group"><input v-model="scanForm.isbn" type="text" placeholder="Quét hoặc nhập ISBN" @keydown.enter="lookupMetadataByIsbn" /><button class="btn-secondary" @click="lookupMetadataByIsbn" :disabled="isScanning">Tra cứu</button></div><small :class="['scan-status', { success: scanError.includes('Thành công'), error: scanError.includes('lỗi') || scanError.includes('Không') }]">{{ scanError }}</small></div>
+            <div class="form-group"><label>Tên truyện</label><input v-model="scanForm.name" type="text" /></div>
+            <div class="form-group"><label>Tập số</label><input v-model.number="scanForm.volume" type="number" min="1" /></div>
+            <div class="form-group"><label>Tác giả</label><input v-model="scanForm.author" type="text" /></div>
+            <div class="form-group"><label>Thể loại</label><input v-model="scanForm.genre" type="text" /></div>
+            <div class="form-group"><label>Giá bán mới</label><input v-model.number="scanForm.price" type="number" step="1000" min="0" /></div>
+            <div class="form-group"><label>Số lượng kho bán</label><input v-model.number="scanForm.retail_stock" type="number" min="1" /></div>
+            <div class="form-group full-width" v-if="scanForm.cover_url"><img :src="scanForm.cover_url && !scanForm.cover_url.startsWith('http') ? `${API_BASE_URL}${scanForm.cover_url}` : scanForm.cover_url" class="cover-preview" /></div>
+          </div>
+          <template #footer><button class="btn-secondary" @click="isScanModalOpen = false">Hủy</button><button class="btn-primary" @click="saveScannedVolume" :disabled="isScanning || !scanForm.isbn || !scanForm.name">Lưu vào kho</button></template>
+        </BaseModal>
+
+        <!-- MODAL: Restock -->
+        <BaseModal :is-open="isRestockModalOpen" title="Bổ sung tồn kho" @close="isRestockModalOpen = false">
+          <div class="form-grid"><div class="form-group full-width"><label>Số lượng bổ sung</label><input v-model.number="restockQuantity" type="number" min="1" /><small class="hint">Số sách bán thêm vào kho.</small></div></div>
+          <template #footer><button class="btn-secondary" @click="isRestockModalOpen = false">Hủy</button><button class="btn-primary" @click="saveRestock">Xác nhận</button></template>
+        </BaseModal>
       </div>
 
-      <!-- MODAL: Volumes -->
-      <BaseModal :is-open="isModalOpen" :title="selectedBook?.name" @close="isModalOpen = false" custom-class="modal-large">
-        <div class="volume-table-wrapper">
-          <table class="volume-table">
-            <thead><tr><th>Tập</th><th>ISBN</th><th>Giá bán</th><th>Giá thuê</th><th>Tồn kho</th><th>Số lượng thuê</th></tr></thead>
-            <tbody>
-              <tr v-for="vol in selectedBook?.volumes" :key="vol.id" @click="openItemsModal(vol)">
-                <td>Tập {{ vol.volume }}</td><td>{{ vol.isbn || '—' }}</td><td>{{ formatVND(vol.price) }}</td><td>{{ formatVND(vol.rent_price) }}</td><td>{{ vol.so_luong }}</td><td>{{ vol.rental_item_count }}</td>
-                <td class="actions" @click.stop>
-                  <button class="icon-small restock" @click="openRestockVolume(vol)" title="Bổ sung"><span class="material-icons">add_box</span></button>
-                  <button class="icon-small edit" @click="openEditVolume(vol)"><span class="material-icons">edit</span></button>
-                  <button class="icon-small delete" @click="deleteVolume(selectedBook, vol.id)"><span class="material-icons">delete</span></button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+      <!-- Nội dung History -->
+      <div v-else-if="activeTab === 'history'">
+        <div v-if="isLogsLoading" class="screen-loading-state">
+          <span class="material-icons spin">autorenew</span>
+          Đang nạp lịch sử nạp sách...
         </div>
-        <template #footer><button class="btn-secondary" @click="isModalOpen = false">Đóng</button><button class="btn-primary" @click="openAddVolume">+ Thêm tập mới</button></template>
-      </BaseModal>
-
-      <!-- MODAL: Items -->
-      <BaseModal :is-open="isItemsModalOpen" :title="`${selectedBook?.name} - Tập ${selectedVolume?.volume}`" @close="isItemsModalOpen = false" custom-class="modal-extra-large">
-        <div class="items-table-wrapper">
-          <table class="items-table">
-            <thead><tr><th>Mã vạch</th><th>Loại</th><th>Trạng thái</th><th>Tình trạng</th><th>Ghi chú</th><th>Phiên bản</th><th></th></tr></thead>
-            <tbody>
-              <tr v-for="it in selectedVolume?.items" :key="it.id">
-                <td class="code-cell">{{ it.id }}</td>
-                <td><span :class="['type-badge', it.item_type === 'retail' ? 'retail' : 'rental']">{{ it.type_label }}</span></td>
-                <td>{{ getStatusText(it.status) }}</td><td>{{ it.condition }}</td><td>{{ it.note || '—' }}</td><td>{{ it.version }}</td>
-                <td class="actions">
-                  <button class="icon-small edit" @click="openEditItem(it)"><span class="material-icons">edit</span></button>
-                  <button class="icon-small delete" @click="deleteItem(selectedVolume, it.id)"><span class="material-icons">delete</span></button>
-                  <button v-if="it.item_type === 'retail'" class="icon-small convert" @click="convertItemToRental(it)" title="Chuyển thuê"><span class="material-icons">sync_alt</span></button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div v-else class="logs-container">
+          <div v-for="log in logs" :key="log.id" class="log-card">
+            <div class="log-icon" :class="log.action_type.toLowerCase()">
+              <span class="material-icons">{{ getLogIcon(log.action_type) }}</span>
+            </div>
+            <div class="log-content">
+              <div class="log-header">
+                <span class="log-user">{{ log.username || "Hệ thống" }}</span>
+                <span class="log-time">{{ formatDateTime(log.created_at) }}</span>
+              </div>
+              <div class="log-message"> 
+                <span class="log-action">{{ formatActionType(log.action_type) }}</span>
+                <span class="log-target"> {{ log.title_name }} {{ log.sub_text }}</span>
+                <p v-if="log.note" class="log-note">{{ log.note }}</p>
+              </div>
+              <div v-if="log.change_qty !== 0" class="log-delta">
+                Biến động:
+                <span :class="log.change_qty > 1 ? 'plus' : 'minus'">
+                  {{ log.change_qty > 0 ? "+" : "" }}{{ log.change_qty }}
+                </span>
+                (Tồn kho: {{ log.old_qty }} → {{ log.new_qty }})
+              </div>
+            </div>
+          </div>
+          <div v-if="logs.length === 0" class="empty-state">Chưa có lịch sử cập nhật nào.</div>
         </div>
-        <template #footer>
-          <button class="btn-secondary" @click="isItemsModalOpen = false">Đóng</button>
-          <button class="btn-primary" @click="openConvertRental" v-if="selectedVolume?.retail_stock > 0">Chuyển thuê (tồn: {{ selectedVolume?.retail_stock }})</button>
-          <button class="btn-primary" @click="openAddItem">+ Thêm bản sao mới</button>
-        </template>
-      </BaseModal>
-
-      <!-- MODAL: Book (Add/Edit) -->
-      <BaseModal :is-open="isAddBookModalOpen || isEditBookModalOpen" :title="isEditBookModalOpen ? 'Sửa thông tin truyện' : 'Thêm truyện mới'" @close="isAddBookModalOpen = false; isEditBookModalOpen = false">
-        <div class="form-grid">
-          <div class="form-group"><label>Mã truyện</label><input v-model="formBook.code" type="text" placeholder="TR001" /></div>
-          <div class="form-group"><label>Tên truyện *</label><input v-model="formBook.name" type="text" placeholder="Nhập tên truyện..." /></div>
-          <div class="form-group"><label>Tác giả</label><input v-model="formBook.author" type="text" placeholder="Nhập tên tác giả..." /></div>
-          <div class="form-group"><label>Thể loại</label><input v-model="formBook.genre" type="text" placeholder="Shonen, Drama..." /></div>
-          <div class="form-group"><label>Nhà xuất bản</label><input v-model="formBook.publisher" type="text" placeholder="Nhập tên NXB..." /></div>
-          <div class="form-group full-width"><label>Mô tả</label><textarea v-model="formBook.description" rows="3"></textarea></div>
-        </div>
-        <template #footer><button class="btn-secondary" @click="isAddBookModalOpen = false; isEditBookModalOpen = false">Hủy</button><button class="btn-primary" @click="saveBook">{{ isEditBookModalOpen ? 'Cập nhật' : 'Thêm mới' }}</button></template>
-      </BaseModal>
-
-      <!-- MODAL: Volume (Add/Edit) -->
-      <BaseModal :is-open="isAddVolumeModalOpen || isEditVolumeModalOpen" :title="isEditVolumeModalOpen ? 'Sửa tập truyện' : 'Thêm tập mới'" @close="isAddVolumeModalOpen = false; isEditVolumeModalOpen = false">
-        <div class="form-grid">
-          <div class="form-group"><label>ISBN</label><input v-model="formVolume.isbn" type="text" placeholder="978-..." /></div>
-          <div class="form-group"><label>Tập số</label><input v-model="formVolume.volume" type="text" placeholder="105" /></div>
-          <div class="form-group"><label>Số lượng</label><input v-model="formVolume.so_luong" type="number" /></div>
-          <div class="form-group"><label>Giá bán (VND)</label><input v-model="formVolume.price" type="text" placeholder="20.000đ" /></div>
-          <div class="form-group"><label>Giá thuê (VND/ngày)</label><input v-model="formVolume.rent_price" type="text" placeholder="5.000đ" /></div>
-        </div>
-        <template #footer><button class="btn-secondary" @click="isAddVolumeModalOpen = false; isEditVolumeModalOpen = false">Hủy</button><button class="btn-primary" @click="saveVolume">{{ isEditVolumeModalOpen ? 'Cập nhật' : 'Thêm mới' }}</button></template>
-      </BaseModal>
-
-      <!-- MODAL: Item (Add/Edit) -->
-      <BaseModal :is-open="isAddItemModalOpen || isEditItemModalOpen" :title="isEditItemModalOpen ? 'Sửa bản sao' : 'Thêm bản sao mới'" @close="isAddItemModalOpen = false; isEditItemModalOpen = false">
-        <div class="form-grid">
-          <div class="form-group" v-if="isEditItemModalOpen"><label>Mã vạch</label><input v-model="formItem.id" type="text" disabled /></div>
-          <div class="form-group"><label>Loại hàng</label><select v-model="formItem.item_type"><option value="rental">Sách Thuê</option><option value="retail">Sách Bán</option></select></div>
-          <div class="form-group"><label>Trạng thái</label><select v-model="formItem.status"><option>Có sẵn</option><option>Đã thuê</option><option>Bảo trì</option></select></div>
-          <div class="form-group"><label>Tình trạng</label><input v-model="formItem.condition" type="text" placeholder="Mới, Cũ..." /></div>
-          <div class="form-group full-width"><label>Ghi chú</label><input v-model="formItem.note" type="text" /></div>
-        </div>
-        <template #footer><button class="btn-secondary" @click="isAddItemModalOpen = false; isEditItemModalOpen = false">Hủy</button><button class="btn-primary" @click="saveItem">{{ isEditItemModalOpen ? 'Cập nhật' : 'Thêm mới' }}</button></template>
-      </BaseModal>
-
-      <!-- MODAL: Convert to Rental -->
-      <BaseModal :is-open="isConvertRentalModalOpen" title="Chuyển sang truyện thuê" @close="isConvertRentalModalOpen = false">
-        <div class="form-grid"><div class="form-group full-width"><label>Số lượng muốn chuyển từ kho bán</label><input v-model.number="formConvert.quantity" type="number" min="1" :max="selectedVolume?.retail_stock" /><small class="hint">Hành động này sẽ trừ hàng tồn bán và tạo mã vạch bản sao mới.</small></div></div>
-        <template #footer><button class="btn-secondary" @click="isConvertRentalModalOpen = false">Hủy</button><button class="btn-primary" @click="saveConvertRental">Xác nhận chuyển</button></template>
-      </BaseModal>
-
-      <!-- MODAL: Scan ISBN -->
-      <BaseModal :is-open="isScanModalOpen" title="Nhập nhanh qua ISBN" @close="isScanModalOpen = false">
-        <div class="form-grid">
-          <div class="form-group full-width"><label>Mã ISBN</label><div class="isbn-input-group"><input v-model="scanForm.isbn" type="text" placeholder="Quét hoặc nhập ISBN" @keydown.enter="lookupMetadataByIsbn" /><button class="btn-secondary" @click="lookupMetadataByIsbn" :disabled="isScanning">Tra cứu</button></div><small :class="['scan-status', { success: scanError.includes('Thành công'), error: scanError.includes('lỗi') || scanError.includes('Không') }]">{{ scanError }}</small></div>
-          <div class="form-group"><label>Tên truyện</label><input v-model="scanForm.name" type="text" /></div>
-          <div class="form-group"><label>Tập số</label><input v-model.number="scanForm.volume" type="number" min="1" /></div>
-          <div class="form-group"><label>Tác giả</label><input v-model="scanForm.author" type="text" /></div>
-          <div class="form-group"><label>Thể loại</label><input v-model="scanForm.genre" type="text" /></div>
-          <div class="form-group"><label>Giá bán mới</label><input v-model.number="scanForm.price" type="number" step="1000" min="0" /></div>
-          <div class="form-group"><label>Số lượng kho bán</label><input v-model.number="scanForm.retail_stock" type="number" min="1" /></div>
-          <div class="form-group full-width" v-if="scanForm.cover_url"><img :src="scanForm.cover_url && !scanForm.cover_url.startsWith('http') ? `${API_BASE_URL}${scanForm.cover_url}` : scanForm.cover_url" class="cover-preview" /></div>
-        </div>
-        <template #footer><button class="btn-secondary" @click="isScanModalOpen = false">Hủy</button><button class="btn-primary" @click="saveScannedVolume" :disabled="isScanning || !scanForm.isbn || !scanForm.name">Lưu vào kho</button></template>
-      </BaseModal>
-
-      <!-- MODAL: Restock -->
-      <BaseModal :is-open="isRestockModalOpen" title="Bổ sung tồn kho" @close="isRestockModalOpen = false">
-        <div class="form-grid"><div class="form-group full-width"><label>Số lượng bổ sung</label><input v-model.number="restockQuantity" type="number" min="1" /><small class="hint">Số sách bán thêm vào kho.</small></div></div>
-        <template #footer><button class="btn-secondary" @click="isRestockModalOpen = false">Hủy</button><button class="btn-primary" @click="saveRestock">Xác nhận</button></template>
-      </BaseModal>
+      </div>
     </div>
   </DefaultLayout>
 </template>
@@ -887,4 +998,152 @@ const formatVND = (val: number) => {
 @media (max-width: 640px) {
   .modal-large :deep(.modal-content), .modal-extra-large :deep(.modal-content) { width: 95vw; }
 }
+
+.view-tabs {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 2px;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.2s;
+}
+
+.tab-item:hover {
+  color: #2563eb;
+}
+
+.tab-item.active {
+  color: #2563eb;
+}
+
+.tab-item.active::after {
+  content: "";
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: #2563eb;
+  border-radius: 999px;
+}
+.screen-loading-state {
+  border-radius: 14px;
+  border: 1px solid #dbeafe;
+  background: white;
+  color: #1e3a8a;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  padding: 18px;
+  font-weight: 700;
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.logs-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(100vh - 280px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.log-card {
+  display: flex;
+  gap: 16px;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 16px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.log-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+}
+.log-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.log-icon.stock_in { background: #ecfdf5; color: #10b981; }
+.log-icon.convert { background: #eff6ff; color: #3b82f6; }
+.log-icon.price_change { background: #fff7ed; color: #f97316; }
+.log-icon.adjust { background: #fef2f2; color: #ef4444; }
+.log-icon.default { background: #f8fafc; color: #64748b; }
+.log-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.log-user {
+  font-weight: 800;
+  color: #1e293b;
+  font-size: 0.9rem;
+}
+.log-time {
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+.log-message {
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+.log-action {
+  font-weight: 700;
+  color: #1e293b;
+}
+.log-target {
+  color: #475569;
+}
+.log-note {
+  margin: 4px 0 0;
+  font-size: 0.85rem;
+  color: #64748b;
+  font-style: italic;
+  background: #f8fafc;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.log-delta {
+  margin-top: 6px;
+  font-size: 0.85rem;
+  color: #475569;
+  font-weight: 600;
+  background: #f1f5f9;
+  padding: 4px 10px;
+  border-radius: 6px;
+  align-self: flex-start;
+}
+.log-delta .plus { color: #10b981; }
+.log-delta .minus { color: #ef4444; }
 </style>
