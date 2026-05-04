@@ -8,7 +8,7 @@ type ErrorPayload = {
   details?: unknown;
 };
 
-type ResponseEnvelope<T> = {
+export type ResponseEnvelope<T> = {
   success?: boolean;
   data?: T;
   error?: ErrorPayload;
@@ -42,7 +42,7 @@ export class StoryHubApiError extends Error {
   }
 }
 
-async function request<T>(path: string, options: RequestOptions): Promise<T> {
+export async function request<T>(path: string, options: RequestOptions): Promise<T> {
   const headers = new Headers(options.headers);
   headers.set("Content-Type", "application/json");
   headers.set("Authorization", `Bearer ${options.token}`);

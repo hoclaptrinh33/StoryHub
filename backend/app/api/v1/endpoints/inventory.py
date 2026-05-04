@@ -858,7 +858,7 @@ async def create_volume(
                 text(
                     """
                     UPDATE volume 
-                    SET retail_stock = retail_stock + :qty, isbn = :isbn, updated_at = CURRENT_TIMESTAMP
+                    SET retail_stock = retail_stock + :qty, isbn = :isbn, deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
                     WHERE id = :vid
                     """
                 ),
@@ -1509,7 +1509,6 @@ async def delete_volume(
         old_row = old_vol.mappings().first()
         if not old_row:
             raise AppError(code="VOLUME_NOT_FOUND", message="Không tìm thấy tập truyện", status_code=404)
-    
         await session.execute(
             text("UPDATE volume SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
             {"id": volume_id}

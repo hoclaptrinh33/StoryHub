@@ -42,6 +42,49 @@ class InventoryAlertItem(BaseModel):
     available_items: int
 
 
+class FluctuationRequest(BaseModel):
+    from_date: str = Field(min_length=10)
+    to_date: str = Field(min_length=10)
+    group_by: Literal["day", "week", "month", "year"]
+    title_id: int | None = None
+    request_id: str = Field(min_length=6, max_length=128)
+
+
+class FluctuationItem(BaseModel):
+    period: str
+    stock_in: int
+    sale: int
+    rental: int
+
+
+class FluctuationTotals(BaseModel):
+    stock_in: int = 0
+    sale: int = 0
+    rental: int = 0
+
+
+class FluctuationPayload(BaseModel):
+    data: list[FluctuationItem]
+    totals: FluctuationTotals | None = None
+
+
+class FluctuationDetailRequest(FluctuationRequest):
+    period: str
+
+
+class FluctuationDetailItem(BaseModel):
+    volume_id: int
+    volume_name: str
+    isbn: str | None
+    stock_in: int
+    sale: int
+    rental: int
+
+
+class FluctuationDetailPayload(BaseModel):
+    data: list[FluctuationDetailItem]
+
+
 class ReportTopCustomer(BaseModel):
     id: int
     name: str
@@ -484,3 +527,264 @@ async def get_revenue_summary_report(
         raise
 
     return envelope
+
+
+@router.post("/inventory-fluctuations", response_model=ResponseEnvelope[FluctuationPayload])
+async def get_inventory_fluctuations(
+    payload: FluctuationRequest,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[FluctuationPayload] | dict[str, object]:
+    auth.require_role("manager", "owner")
+    auth.require_scope("report:read")
+
+    cached = await get_cached_response(
+        session,
+        scope="reports.inventory_fluctuations",
+        request_id=payload.request_id,
+    )
+    if cached is not None:
+        return cached.payload
+
+    from_iso = payload.from_date
+    to_iso = payload.to_date
+    group_by = payload.group_by
+    title_id = payload.title_id
+
+    # SQLite format string based on group_by
+    if group_by == "day":
+        date_fmt = "%Y-%m-%d"
+    elif group_by == "week":
+        date_fmt = "%Y-W%W"
+    elif group_by == "month":
+        date_fmt = "%Y-%m"
+    else:  # year
+        date_fmt = "%Y"
+
+    # Check join column for pos_order_item
+    join_column = await _detect_pos_order_item_volume_column(session)
+
+    # Base filter for title_id
+    stock_title_filter = "AND v.title_id = :title_id" if title_id else ""
+    sale_title_filter = ""
+    rental_title_filter = "AND v.title_id = :title_id" if title_id else ""
+
+    if title_id:
+        if join_column == "volume_id":
+            sale_title_filter = "AND v.title_id = :title_id"
+        else:
+            sale_title_filter = "AND v.title_id = :title_id" # both join through volume
+
+    query = f"""
+        SELECT 
+            period,
+            SUM(stock_in) AS stock_in,
+            SUM(sale) AS sale,
+            SUM(rental) AS rental
+        FROM (
+            -- STOCK_IN
+            SELECT 
+                strftime('{date_fmt}', l.created_at) AS period,
+                SUM(l.change_qty) AS stock_in,
+                0 AS sale,
+                0 AS rental
+            FROM inventory_log l
+            JOIN volume v ON CAST(l.target_id AS INTEGER) = v.id
+            WHERE l.action_type = 'STOCK_IN' 
+              AND l.target_type = 'VOLUME'
+              AND date(l.created_at) BETWEEN date(:from_date) AND date(:to_date)
+              {stock_title_filter}
+            GROUP BY period
+
+            UNION ALL
+
+            -- SALE
+            SELECT 
+                strftime('{date_fmt}', po.created_at) AS period,
+                0 AS stock_in,
+                SUM(poi.quantity) AS sale,
+                0 AS rental
+            FROM pos_order_item poi
+            JOIN pos_order po ON po.id = poi.order_id
+            {"JOIN volume v ON v.id = poi.volume_id" if join_column == "volume_id" else "JOIN item i ON i.id = poi.item_id JOIN volume v ON v.id = i.volume_id"}
+            WHERE po.status IN ('paid', 'partially_refunded', 'refunded')
+              AND po.deleted_at IS NULL
+              AND date(po.created_at) BETWEEN date(:from_date) AND date(:to_date)
+              {sale_title_filter}
+            GROUP BY period
+
+            UNION ALL
+
+            -- RENTAL
+            SELECT 
+                strftime('{date_fmt}', rc.rent_date) AS period,
+                0 AS stock_in,
+                0 AS sale,
+                COUNT(*) AS rental
+            FROM rental_item ri
+            JOIN rental_contract rc ON rc.id = ri.contract_id
+            JOIN item i ON i.id = ri.item_id
+            JOIN volume v ON v.id = i.volume_id
+            WHERE rc.deleted_at IS NULL
+              AND date(rc.rent_date) BETWEEN date(:from_date) AND date(:to_date)
+              {rental_title_filter}
+            GROUP BY period
+        )
+        GROUP BY period
+        ORDER BY period ASC;
+    """
+
+    params = {"from_date": from_iso, "to_date": to_iso}
+    if title_id:
+        params["title_id"] = title_id
+
+    result = await session.execute(text(query), params)
+    rows = result.mappings().all()
+
+    data = [
+        FluctuationItem(
+            period=str(row["period"]),
+            stock_in=int(row["stock_in"] or 0),
+            sale=int(row["sale"] or 0),
+            rental=int(row["rental"] or 0)
+        )
+        for row in rows
+    ]
+
+    totals = FluctuationTotals(
+        stock_in=sum(i.stock_in for i in data),
+        sale=sum(i.sale for i in data),
+        rental=sum(i.rental for i in data)
+    )
+
+    envelope = success_response(FluctuationPayload(data=data, totals=totals))
+
+    try:
+        if session.in_transaction():
+            await session.rollback()
+        async with session.begin():
+            await store_cached_response(
+                session,
+                scope="reports.inventory_fluctuations",
+                request_id=payload.request_id,
+                status_code=status.HTTP_200_OK,
+                payload=envelope.model_dump(),
+            )
+    except IntegrityError:
+        pass
+
+    return envelope
+
+
+@router.post("/inventory-fluctuations/detail", response_model=ResponseEnvelope[FluctuationDetailPayload])
+async def get_fluctuation_details(
+    payload: FluctuationDetailRequest,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[FluctuationDetailPayload] | dict[str, object]:
+    auth.require_role("manager", "owner")
+    auth.require_scope("report:read")
+
+    # Grouping logic remains similar but adds v.id and v.volume_number
+    if payload.group_by == "day":
+        date_fmt = "%Y-%m-%d"
+    elif payload.group_by == "week":
+        date_fmt = "%Y-W%W"
+    elif payload.group_by == "month":
+        date_fmt = "%Y-%m"
+    else:
+        date_fmt = "%Y"
+
+    from_iso = payload.from_date
+    to_iso = payload.to_date
+    title_id = payload.title_id
+    period = payload.period
+
+    join_column = await _detect_pos_order_item_volume_column(session)
+    stock_title_filter = "AND v.title_id = :title_id" if title_id else ""
+    sale_title_filter = "AND v.title_id = :title_id" if title_id else ""
+    rental_title_filter = "AND v.title_id = :title_id" if title_id else ""
+
+    query = f"""
+        SELECT 
+            v.id AS volume_id,
+            t.name || ' - Tập ' || v.volume_number AS volume_name,
+            v.isbn,
+            SUM(stock_in) AS stock_in,
+            SUM(sale) AS sale,
+            SUM(rental) AS rental
+        FROM (
+            -- STOCK_IN
+            SELECT 
+                CAST(l.target_id AS INTEGER) as volume_id,
+                SUM(l.change_qty) AS stock_in,
+                0 AS sale,
+                0 AS rental
+            FROM inventory_log l
+            WHERE l.action_type = 'STOCK_IN' 
+              AND l.target_type = 'VOLUME'
+              AND strftime('{date_fmt}', l.created_at) = :period
+              AND date(l.created_at) BETWEEN date(:from_date) AND date(:to_date)
+            GROUP BY volume_id
+
+            UNION ALL
+
+            -- SALE
+            SELECT 
+                {"poi.volume_id" if join_column == "volume_id" else "v.id"} AS volume_id,
+                0 AS stock_in,
+                SUM(poi.quantity) AS sale,
+                0 AS rental
+            FROM pos_order_item poi
+            JOIN pos_order po ON po.id = poi.order_id
+            {"JOIN volume v ON v.id = poi.volume_id" if join_column == "volume_id" else "JOIN item i ON i.id = poi.item_id JOIN volume v ON v.id = i.volume_id"}
+            WHERE po.status IN ('paid', 'partially_refunded', 'refunded')
+              AND po.deleted_at IS NULL
+              AND strftime('{date_fmt}', po.created_at) = :period
+              AND date(po.created_at) BETWEEN date(:from_date) AND date(:to_date)
+            GROUP BY volume_id
+
+            UNION ALL
+
+            -- RENTAL
+            SELECT 
+                v.id AS volume_id,
+                0 AS stock_in,
+                0 AS sale,
+                COUNT(*) AS rental
+            FROM rental_item ri
+            JOIN rental_contract rc ON rc.id = ri.contract_id
+            JOIN item i ON i.id = ri.item_id
+            JOIN volume v ON v.id = i.volume_id
+            WHERE rc.deleted_at IS NULL
+              AND strftime('{date_fmt}', rc.rent_date) = :period
+              AND date(rc.rent_date) BETWEEN date(:from_date) AND date(:to_date)
+            GROUP BY volume_id
+        ) combined
+        JOIN volume v ON v.id = combined.volume_id
+        JOIN title t ON t.id = v.title_id
+        {f"WHERE t.id = :title_id" if title_id else ""}
+        GROUP BY v.id, volume_name, v.isbn
+        ORDER BY volume_name ASC;
+    """
+
+    params = {"from_date": from_iso, "to_date": to_iso, "period": period}
+    if title_id:
+        params["title_id"] = title_id
+
+    result = await session.execute(text(query), params)
+    rows = result.mappings().all()
+
+    data = [
+        FluctuationDetailItem(
+            volume_id=row["volume_id"],
+            volume_name=row["volume_name"],
+            isbn=row["isbn"],
+            stock_in=int(row["stock_in"] or 0),
+            sale=int(row["sale"] or 0),
+            rental=int(row["rental"] or 0)
+        )
+        for row in rows
+    ]
+
+    return success_response(FluctuationDetailPayload(data=data))
