@@ -712,12 +712,12 @@ const K_RENT_DAILY = 0.05;
 const K_DEPOSIT = 0.3;
 const D_FLOOR = 1000;
 
-const resolveRentPrice = (sellPrice: number, days: number) => {
-  return Math.max(Math.round(sellPrice * K_RENT_DAILY * days), 2000);
+const resolveRentPrice = (sellPrice: number, days: number, conditionLevel = 100) => {
+  return Math.max(Math.round(sellPrice * K_RENT_DAILY * (conditionLevel / 100) * days), 2000);
 };
 
-const resolveDepositAmount = (sellPrice: number) => {
-  return Math.max(Math.round(sellPrice * K_DEPOSIT), D_FLOOR);
+const resolveDepositAmount = (sellPrice: number, conditionLevel = 100) => {
+  return Math.max(Math.round(sellPrice * K_DEPOSIT), 1000);
 };
 
 const canonicalizeRentalSku = (value: string) => {

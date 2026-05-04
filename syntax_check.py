@@ -5,11 +5,26 @@ cursor = conn.cursor()
 print("=== USERS ===")
 for row in cursor.execute("SELECT id, username, role FROM user"):
     print(row)
-
-cursor.execute("INSERT OR IGNORE INTO customer (id, name, phone, membership_level) VALUES (1, 'Khách lẻ', '0000000000', 'standard');")
+cursor.execute("""UPDATE price_rule 
+SET k_rent = 0.05, k_deposit = 0.3, d_floor = 1000 
+WHERE id = 1; """)
 conn.commit()
-print("\n=== CUSTOMERS ===")
-for row in cursor.execute("SELECT id, name, phone FROM customer LIMIT 5"):
+
+print("\n=== rule ===")
+for row in cursor.execute("""SELECT
+                    id,
+                    version_no,
+                    k_rent,
+                    k_deposit,
+                    d_floor,
+                    used_demand_factor,
+                    used_cap_ratio
+                FROM price_rule
+                WHERE status = 'active'
+                  AND (valid_from IS NULL OR valid_from <= CURRENT_TIMESTAMP)
+                  AND (valid_to IS NULL OR valid_to > CURRENT_TIMESTAMP)
+                ORDER BY activated_at DESC, id DESC
+                LIMIT 1;"""):
     print(row)
 
 conn.close()

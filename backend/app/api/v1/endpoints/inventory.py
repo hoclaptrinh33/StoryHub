@@ -24,6 +24,7 @@ from app.services import (
     compute_sell_price,
     get_cached_response,
     is_remote_image_url,
+    resolve_active_price_rule,
     save_cover_from_base64,
     save_cover_from_url,
     store_cached_response,
@@ -1155,7 +1156,7 @@ async def list_titles_with_volumes(
             text(f"""
                 SELECT id, volume_id, status, item_type, condition_level, notes, version_no, reserved_at, reservation_expire_at
                 FROM item
-                WHERE volume_id IN ({vol_id_placeholders}) AND deleted_at IS NULL
+                WHERE volume_id IN ({vol_id_placeholders}) AND deleted_at IS NULL AND status != 'sold'
                 ORDER BY volume_id ASC, id ASC
             """)
         )
@@ -1181,9 +1182,10 @@ async def list_titles_with_volumes(
             if str(ir["status"]) == "available":
                 rental_count_by_volume[vid] = rental_count_by_volume.get(vid, 0) + 1
 
-    # 4. Ghép kết quả
-    K_RENT = 0.05
-    K_DEPOSIT = 0.30
+    # 4. Ghép kết quả (Sử dụng pricing_rule từ database)
+    pricing_rule = await resolve_active_price_rule(session)
+    K_RENT = pricing_rule.k_rent
+    K_DEPOSIT = pricing_rule.k_deposit
 
     volumes_by_title: dict[int, list[TitleVolumeRow]] = {}
     for vr in vol_rows:

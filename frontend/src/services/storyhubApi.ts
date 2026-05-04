@@ -212,6 +212,7 @@ export type InventoryItemListItem = {
   stock_quantity?: number | null;
   status: string;
   type: "retail" | "rental";
+  p_sell_new: number;
 };
 
 export type InventoryLogItem = {

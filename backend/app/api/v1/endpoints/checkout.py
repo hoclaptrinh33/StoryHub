@@ -386,12 +386,12 @@ async def unified_checkout(
                     )
 
                 p_sell_new = int(item_row["p_sell_new"])
+                # Giá thuê = giá bìa * k_rent * số ngày (không phụ thuộc chất lượng sách để đảm bảo nhất quán)
                 p_rent = max(
                     int(
                         round(
                             p_sell_new
                             * pricing_rule.k_rent
-                            * (int(item_row["condition_level"]) / 100.0)
                             * payload.rental_days
                         )
                     ),
