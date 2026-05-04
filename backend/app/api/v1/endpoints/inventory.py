@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
+
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Path, Request
@@ -1221,16 +1222,40 @@ class TitleMutateRequest(BaseModel):
 @router.post("/titles")
 async def create_new_title(
     payload: TitleMutateRequest,
+    request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
+    normalized_cover_url = (payload.cover_url or "").strip()
+    if normalized_cover_url and is_remote_image_url(normalized_cover_url):
+        try:
+            # We don't have ISBN here, so we use name hash or something similar,
+            # but ideally we store it by title ID. For now, name-based is fine
+            # if we don't want to change save_cover_from_url signature.
+            # Actually, let's use a temporary string if ISBN is missing.
+            normalized_cover_url = await asyncio.to_thread(
+                save_cover_from_url,
+                f"title_{uuid.uuid4().hex[:8]}",
+                normalized_cover_url,
+            )
+        except Exception:
+            pass
+
     result = await session.execute(
         text("""
-            INSERT INTO title (name, author, description, genre, publisher)
-            VALUES (:name, :author, :desc, :genre, :pub)
+            INSERT INTO title (name, author, description, genre, publisher, cover_url)
+            VALUES (:name, :author, :desc, :genre, :pub, :cover)
             RETURNING id
         """),
-        {"name": payload.name, "author": payload.author, "desc": payload.description, "genre": payload.genre, "pub": payload.publisher}
+        {
+            "name": payload.name, 
+            "author": payload.author, 
+            "desc": payload.description, 
+            "genre": payload.genre, 
+            "pub": payload.publisher,
+            "cover": normalized_cover_url or None
+        }
     )
     new_id = result.scalar()
     await session.commit()
@@ -1241,44 +1266,93 @@ async def create_new_title(
         entity_type="title",
         entity_id=str(new_id),
         before=None,
-        after={"name": payload.name},
+        after={
+            "name": payload.name,
+            "author": payload.author,
+            "genre": payload.genre,
+            "publisher": payload.publisher,
+            "cover_url": normalized_cover_url
+        },
         ip_address=None,
         device_id=None,
     )
+    await event_publisher.publish_inventory_data_changed(reason="title_created", branch_id=auth.branch_id)
     return success_response({"id": new_id})
 
 @router.put("/titles/{title_id}")
 async def update_title(
     title_id: int,
     payload: TitleMutateRequest,
+    request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
+    normalized_cover_url = (payload.cover_url or "").strip()
+    if normalized_cover_url and is_remote_image_url(normalized_cover_url):
+        try:
+            normalized_cover_url = await asyncio.to_thread(
+                save_cover_from_url,
+                f"title_{title_id}",
+                normalized_cover_url,
+            )
+        except Exception:
+            pass
+
     await session.execute(
         text("""
             UPDATE title
-            SET name = :name, author = :author, description = :desc, genre = :genre, publisher = :pub, updated_at = CURRENT_TIMESTAMP
+            SET name = :name, 
+                author = :author, 
+                description = :desc, 
+                genre = :genre, 
+                publisher = :pub,
+                cover_url = :cover,
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = :id AND deleted_at IS NULL
         """),
-        {"id": title_id, "name": payload.name, "author": payload.author, "desc": payload.description, "genre": payload.genre, "pub": payload.publisher}
+        {
+            "id": title_id, 
+            "name": payload.name, 
+            "author": payload.author, 
+            "desc": payload.description, 
+            "genre": payload.genre, 
+            "pub": payload.publisher,
+            "cover": normalized_cover_url or None
+        }
     )
     await session.commit()
+    old_title_res = await session.execute(
+        text("SELECT name, author, description, genre, publisher, cover_url FROM title WHERE id = :id"),
+        {"id": title_id}
+    )
+    old_title = old_title_res.mappings().first()
+    
     await write_audit_log(
         session=session,
         actor_user_id=auth.user_id,
         action="UPDATE_TITLE",
         entity_type="title",
         entity_id=str(title_id),
-        before=None,
-        after=None,
+        before=dict(old_title) if old_title else None,
+        after={
+            "name": payload.name,
+            "author": payload.author,
+            "description": payload.description,
+            "genre": payload.genre,
+            "publisher": payload.publisher,
+            "cover_url": normalized_cover_url
+        },
         ip_address=None,
         device_id=None,
     )
+    await event_publisher.publish_inventory_data_changed(reason="title_updated", branch_id=auth.branch_id)
     return success_response({"id": title_id})
 
 @router.delete("/titles/{title_id}")
 async def delete_title(
     title_id: int,
+    request: Request,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
 ):
@@ -1301,11 +1375,12 @@ async def delete_title(
         action="DELETE_TITLE",
         entity_type="title",
         entity_id=str(title_id),
-        before=None,
-        after=None,
+        before=None, # In case of delete, after is usually enough if it contains what was deleted or just name
+        after={"name": "Deleted title " + str(title_id)},
         ip_address=None,
         device_id=None,
     )
+    await event_publisher.publish_inventory_data_changed(reason="title_deleted", branch_id=auth.branch_id)
     return success_response({"deleted": True})
 
 
@@ -1325,7 +1400,20 @@ async def update_volume(
     payload: VolumeMutateRequest,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
+    old_vol = await session.execute(
+        text("SELECT volume_number, isbn, p_sell_new, retail_stock FROM volume WHERE id = :id AND deleted_at IS NULL"),
+        {"id": volume_id}
+    )
+    old_row = old_vol.mappings().first()
+    if not old_row:
+        raise AppError(code="VOLUME_NOT_FOUND", message="Không tìm thấy tập truyện", status_code=404)
+    
+    old_vol_num = old_row["volume_number"]
+    old_isbn = old_row["isbn"]
+    old_price = old_row["p_sell_new"]
+    old_stock = old_row["retail_stock"]
     await session.execute(
         text("""
             UPDATE volume
@@ -1334,24 +1422,36 @@ async def update_volume(
         """),
         {
             "id": volume_id, 
-            "vol_num": payload.volume_number, 
+            "vol_num": payload.volume_number,
             "isbn": payload.isbn, 
-            "p_sell": payload.p_sell_new, 
+            "p_sell": payload.p_sell_new,
             "stock": payload.retail_stock
         }
     )
     await session.commit()
+    ip_addr, device = get_request_meta(request)
     await write_audit_log(
         session=session,
         actor_user_id=auth.user_id,
         action="UPDATE_VOLUME",
         entity_type="volume",
         entity_id=str(volume_id),
-        before=None,
-        after=None,
-        ip_address=None,
-        device_id=None,
+        before={
+            "volume_number": old_vol_num,
+            "isbn": old_isbn,
+            "p_sell_new": old_price,
+            "retail_stock": old_stock
+        },
+        after={
+            "volume_number": payload.volume_number,
+            "isbn": payload.isbn,
+            "p_sell_new": payload.p_sell_new,
+            "retail_stock": payload.retail_stock
+        },
+        ip_address=ip_addr,
+        device_id=device,
     )
+    await event_publisher.publish_inventory_data_changed(reason="volume_updated", branch_id=auth.branch_id)
     return success_response({"id": volume_id})
 
 @router.delete("/volumes/{volume_id}")
@@ -1359,7 +1459,16 @@ async def delete_volume(
     volume_id: int,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
+    old_vol = await session.execute(
+        text("SELECT volume_number, isbn, p_sell_new, retail_stock FROM volume WHERE id = :id AND deleted_at IS NULL"),
+        {"id": volume_id}
+    )
+    old_row = old_vol.mappings().first()
+    if not old_row:
+        raise AppError(code="VOLUME_NOT_FOUND", message="Không tìm thấy tập truyện", status_code=404)
+    
     await session.execute(
         text("UPDATE volume SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
         {"id": volume_id}
@@ -1369,17 +1478,24 @@ async def delete_volume(
         {"id": volume_id}
     )
     await session.commit()
+    ip_addr, device = get_request_meta(request)
     await write_audit_log(
         session=session,
         actor_user_id=auth.user_id,
         action="DELETE_VOLUME",
         entity_type="volume",
         entity_id=str(volume_id),
-        before=None,
+        before={
+            "volume_number": old_row["volume_number"],
+            "isbn": old_row["isbn"],
+            "p_sell_new": old_row["p_sell_new"],
+            "retail_stock": old_row["retail_stock"]
+        },
         after=None,
-        ip_address=None,
-        device_id=None,
+        ip_address=ip_addr,
+        device_id=device,
     )
+    await event_publisher.publish_inventory_data_changed(reason="volume_deleted", branch_id=auth.branch_id)
     return success_response({"deleted": True})
 
 
@@ -1406,38 +1522,59 @@ async def create_item(
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session), # noqa: B008
 ):
-    item_id = str(payload.id).strip() if (payload.id is not None and str(payload.id).strip()) else f"RNT-{str(uuid.uuid4()).replace('-', '')[:8].upper()}"
+    
+    if payload.id is not None and str(payload.id).strip():
+        item_id = str(payload.id).strip()
+    else:
+        prefix = "RNT" if payload.item_type == "rental" else "SEL"
+        item_id = f"{prefix}-{str(uuid.uuid4()).replace('-', '')[:8].upper()}"
     
     # Kiem tra id xem co trung khong
-    exist = await session.execute(text("SELECT id FROM item WHERE id = :id"), {"id": item_id})
-    if exist.scalar():
-        raise AppError(status_code=400, message="Mã bản sao đã tồn tại")
+        exist = await session.execute(text("SELECT id FROM item WHERE id = :id"), {"id": item_id})
+        if exist.scalar():
+            raise AppError(status_code=400, message="Mã bản sao đã tồn tại")
 
     await session.execute(
         text("""
-            INSERT INTO item (id, volume_id, status, condition_level, health_percent, version_no, notes)
-            VALUES (:id, :vid, 'available', :cond, :cond, :ver, :notes)
+            INSERT INTO item (id, volume_id, status, item_type, condition_level, health_percent, version_no, notes)
+            VALUES (:id, :vid, 'available', :type, :cond, :cond, :ver, :notes)
         """),
         {
             "id": item_id,
             "vid": payload.volume_id,
+            "type": payload.item_type,
             "cond": payload.condition_level,
             "ver": payload.version_no,
             "notes": payload.notes
         }
     )
+    
+    # Sync retail_stock
+    if payload.item_type == "retail":
+        await session.execute(
+            text("UPDATE volume SET retail_stock = (SELECT COUNT(*) FROM item WHERE volume_id = :vid AND item_type = 'retail' AND status = 'available' AND deleted_at IS NULL) WHERE id = :vid"),
+            {"vid": payload.volume_id}
+        )
+    
     await session.commit()
+    ip_addr, device = get_request_meta(request)
     await write_audit_log(
         session=session,
         actor_user_id=auth.user_id,
-        action="CREATE_ITEM",
+        action="CREATE_ITEM",          # Sửa từ "UPDATE_ITEM" thành "CREATE_ITEM"
         entity_type="item",
         entity_id=item_id,
-        before=None,
-        after=None,
-        ip_address=None,
-        device_id=None,
+        before={},
+        after={
+            "volume_id": payload.volume_id,
+            "item_type": payload.item_type,
+            "condition_level": payload.condition_level,
+            "notes": payload.notes
+        },
+        ip_address=ip_addr,
+        device_id=device,
     )
+    await event_publisher.publish_item_mutated(item_id=item_id, action="created", branch_id=auth.branch_id)
     return success_response({"id": item_id})
 
 @router.put("/items/{item_id}")
@@ -1446,27 +1583,67 @@ async def update_item(
     payload: ItemUpdateRequest,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
+    old_item = await session.execute(
+        text("SELECT status, item_type, condition_level, notes FROM item WHERE id = :id AND deleted_at IS NULL"),
+        {"id": item_id}
+    )
+    old_row = old_item.mappings().first()
+    if not old_row:
+        raise AppError(code="ITEM_NOT_FOUND", message="Không tìm thấy bản sao", status_code=404)
     await session.execute(
         text("""
             UPDATE item
-            SET status = :status, condition_level = :cond, notes = :notes, updated_at = CURRENT_TIMESTAMP
+            SET status = :status, 
+                condition_level = :cond, 
+                notes = :notes, 
+                item_type = COALESCE(:type, item_type),
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = :id AND deleted_at IS NULL
         """),
-        {"id": item_id, "status": payload.status, "cond": payload.condition_level, "notes": payload.notes}
+        {
+            "id": item_id, 
+            "status": payload.status, 
+            "cond": payload.condition_level, 
+            "notes": payload.notes,
+            "type": payload.item_type
+        }
     )
+    
+    # Sync retail_stock (get volume_id first)
+    vol_id_res = await session.execute(text("SELECT volume_id FROM item WHERE id = :id"), {"id": item_id})
+    vol_id = vol_id_res.scalar()
+    if vol_id:
+        await session.execute(
+            text("UPDATE volume SET retail_stock = (SELECT COUNT(*) FROM item WHERE volume_id = :vid AND item_type = 'retail' AND deleted_at IS NULL) WHERE id = :vid"),
+            {"vid": vol_id}
+        )
+
     await session.commit()
+    ip_addr, device = get_request_meta(request)
     await write_audit_log(
         session=session,
         actor_user_id=auth.user_id,
         action="UPDATE_ITEM",
         entity_type="item",
         entity_id=item_id,
-        before=None,
-        after=None,
-        ip_address=None,
-        device_id=None,
+        before={
+            "status": old_row["status"],
+            "item_type": old_row["item_type"],
+            "condition_level": old_row["condition_level"],
+            "notes": old_row["notes"]
+        },
+        after={
+            "status": payload.status,
+            "item_type": payload.item_type or old_row["item_type"],
+            "condition_level": payload.condition_level,
+            "notes": payload.notes
+        },
+        ip_address=ip_addr,
+        device_id=device,
     )
+    await event_publisher.publish_item_mutated(item_id=item_id, action="updated", branch_id=auth.branch_id)
     return success_response({"id": item_id})
 
 @router.delete("/items/{item_id}")
@@ -1474,24 +1651,48 @@ async def delete_item(
     item_id: str,
     auth: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_db_session),
+    event_publisher: EventPublisher = Depends(get_event_publisher),
 ):
+    old_item = await session.execute(
+        text("SELECT status, item_type, condition_level, notes FROM item WHERE id = :id AND deleted_at IS NULL"),
+        {"id": item_id}
+    )
+    old_row = old_item.mappings().first()
+    if not old_row:
+        raise AppError(code="ITEM_NOT_FOUND", message="Không tìm thấy bản sao", status_code=404)
     await session.execute(
         text("UPDATE item SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id"),
         {"id": item_id}
     )
+    
+    # Sync retail_stock (get volume_id first)
+    vol_id_res = await session.execute(text("SELECT volume_id FROM item WHERE id = :id"), {"id": item_id})
+    vol_id = vol_id_res.scalar()
+    if vol_id:
+        await session.execute(
+            text("UPDATE volume SET retail_stock = (SELECT COUNT(*) FROM item WHERE volume_id = :vid AND item_type = 'retail' AND deleted_at IS NULL) WHERE id = :vid"),
+            {"vid": vol_id}
+        )
+        
     await session.commit()
-    await session.commit()
+    ip_addr, device = get_request_meta(request)
     await write_audit_log(
         session=session,
         actor_user_id=auth.user_id,
-        action="DELETE_ITEM",
+        action="DELETE_ITEM",          # Sửa từ "UPDATE_ITEM" thành "DELETE_ITEM"
         entity_type="item",
         entity_id=item_id,
-        before=None,
+        before={
+            "status": old_row["status"],
+            "item_type": old_row["item_type"],
+            "condition_level": old_row["condition_level"],
+            "notes": old_row["notes"]
+        },
         after=None,
-        ip_address=None,
-        device_id=None,
+        ip_address=ip_addr,
+        device_id=device,
     )
+    await event_publisher.publish_item_mutated(item_id=item_id, action="deleted", branch_id=auth.branch_id)
     return success_response({"deleted": True})
 
 
