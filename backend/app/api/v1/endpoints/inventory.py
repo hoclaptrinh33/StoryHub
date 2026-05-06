@@ -415,15 +415,15 @@ async def list_inventory_items(
         FROM promotion p
         JOIN promotion_item pi ON pi.promotion_id = p.id
         WHERE p.is_active = 1 
-          AND p.start_date <= CURRENT_TIMESTAMP 
-          AND p.end_date >= CURRENT_TIMESTAMP
+          AND p.start_date <= :now 
+          AND p.end_date >= :now
     ) best_promo ON (
         (best_promo.target_type = 'volume' AND best_promo.target_id = raw.volume_id)
         OR (best_promo.target_type = 'title' AND best_promo.target_id = (SELECT title_id FROM volume WHERE id = raw.volume_id))
     ) AND best_promo.rank = 1
     """
     
-    params: dict[str, object] = {}
+    params: dict[str, object] = {"now": datetime.now().isoformat()}
     if q:
         # Tối ưu cho search barcode/sku
         q_clean = q.upper().replace("-", "").replace(" ", "").strip()

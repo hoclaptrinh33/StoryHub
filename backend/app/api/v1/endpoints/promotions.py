@@ -422,6 +422,7 @@ class PromotionEventCreate(BaseModel):
     discount_value: int = Field(gt=0)
     start_date: str
     end_date: str
+    is_active: bool = True
     description: str | None = None
 
 class PromotionEventPatch(BaseModel):
@@ -464,11 +465,25 @@ async def create_promotion_event(
     auth.require_scope("admin:write")
 
     ip_address, device_id = get_request_meta(request)
+
+    # Ensure columns exist (Self-healing for missing migration columns)
+    try:
+        async with session.begin():
+            # Check description
+            try: await session.execute(text("ALTER TABLE promotion ADD COLUMN description TEXT"))
+            except Exception: pass
+            
+            # Check is_active
+            try: await session.execute(text("ALTER TABLE promotion ADD COLUMN is_active BOOLEAN DEFAULT 1"))
+            except Exception: pass
+    except Exception:
+        pass
+
     async with session.begin():
         await session.execute(
             text("""
-                INSERT INTO promotion (name, discount_type, discount_value, start_date, end_date, description)
-                VALUES (:name, :dtype, :dval, :start, :end, :desc)
+                INSERT INTO promotion (name, discount_type, discount_value, start_date, end_date, is_active, description)
+                VALUES (:name, :dtype, :dval, :start, :end, :active, :desc)
             """),
             {
                 "name": payload.name,
@@ -476,6 +491,7 @@ async def create_promotion_event(
                 "dval": payload.discount_value,
                 "start": payload.start_date,
                 "end": payload.end_date,
+                "active": 1 if payload.is_active else 0,
                 "desc": payload.description,
             }
         )

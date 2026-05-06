@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Path, Request
@@ -808,13 +808,13 @@ async def _get_promotion_for_volume(session: AsyncSession, volume_id: int) -> di
                 OR (pi.target_type = 'title' AND pi.target_id = (SELECT title_id FROM volume WHERE id = :volume_id))
             )
               AND p.is_active = 1
-              AND p.start_date <= CURRENT_TIMESTAMP
-              AND p.end_date >= CURRENT_TIMESTAMP
+              AND p.start_date <= :now
+              AND p.end_date >= :now
             ORDER BY p.discount_value DESC
             LIMIT 1
             """
         ),
-        {"volume_id": volume_id},
+        {"volume_id": volume_id, "now": datetime.now().isoformat()},
     )
     return result.mappings().first()
 

@@ -263,6 +263,7 @@
                       <div class="details">
                         <strong>{{ item.name }}</strong>
                         <small>Mã: {{ item.code }}</small>
+                        <div v-if="hasItemPromo(item)" class="tag-promo-applied">GIẢM GIÁ</div>
                         <small v-if="isCartItemInRealtimeConflict(item)" class="conflict-note">
                           Trạng thái item đã thay đổi ở quầy khác.
                         </small>
@@ -747,13 +748,12 @@ const hotkeyItems: HotkeyItem[] = [
 
 const K_RENT_DAILY = 0.05;   
 const K_DEPOSIT = 0.3;
-const D_FLOOR = 1000;
 
-const resolveRentPrice = (sellPrice: number, days: number, conditionLevel = 100) => {
-  return Math.max(Math.round(sellPrice * K_RENT_DAILY * (conditionLevel / 100) * days), 2000);
+const resolveRentPrice = (sellPrice: number, days: number) => {
+  return Math.max(Math.round(sellPrice * K_RENT_DAILY * days), 2000);
 };
 
-const resolveDepositAmount = (sellPrice: number, conditionLevel = 100) => {
+const resolveDepositAmount = (sellPrice: number) => {
   return Math.max(Math.round(sellPrice * K_DEPOSIT), 1000);
 };
 
@@ -2637,5 +2637,34 @@ tr.realtime-conflict .details strong {
   .invoice-carousel-actions {
     justify-content: space-between;
   }
+}
+.tag-promo-applied {
+  display: inline-block;
+  background: #ef4444;
+  color: white;
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-top: 2px;
+}
+.field-input {
+  width: 100%;
+  padding: 14px 20px;
+  border: 2px solid #e0e0e0;
+  border-radius: 50px; /* Bo tròn kiểu viên thuốc */
+  font-family: 'Inter', sans-serif;
+  font-size: 15px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  outline: none;
+}
+
+.field-input:focus {
+  border-color: #2563eb; /* Màu xanh hiện đại */
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
+}
+
+.field-input::placeholder {
+  color: #9ca3af;
 }
 </style>

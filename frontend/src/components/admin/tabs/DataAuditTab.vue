@@ -71,6 +71,8 @@
                   <th>Điện thoại</th>
                   <th>Tiền cọc</th>
                   <th>Công nợ</th>
+                  <th>Tổng chi tiêu</th>
+                  <th>Hạng</th>
                   <th>Trạng thái</th>
                   <th>Hành động</th>
                 </tr>
@@ -81,6 +83,13 @@
                   <td>{{ customer.phone }}</td>
                   <td>{{ formatNumber(customer.deposit_balance) }}</td>
                   <td>{{ formatNumber(customer.debt) }}</td>
+                  <td><strong class="spent-val">{{ formatNumber(customer.total_spent ?? 0) }} đ</strong></td>
+                  <td>
+                    <span v-if="customer.spending_tier" :class="['pill-rank', customer.spending_tier]">
+                      {{ customer.spending_tier.toUpperCase() }}
+                    </span>
+                    <span v-else class="pill-rank silver">NORMAL</span>
+                  </td>
                   <td>
                     <span :class="customer.blacklist_flag ? 'pill-danger' : 'pill-ok'">
                       {{ customer.blacklist_flag ? 'Danh sách đen' : 'Hoạt động' }}
@@ -272,6 +281,7 @@ import type {
   AdminTransactionItem,
   AuditLogItem,
   CustomerListItem,
+  CustomerSpendingItem,
 } from '../../../services/storyhubApi';
 import { useAdminApi } from '../../../composables/useAdminApi';
 
@@ -305,7 +315,7 @@ const adminApi = useAdminApi();
 const initialized = ref(false);
 const leftOpen = ref(false);
 
-const customers = ref<CustomerListItem[]>([]);
+const customers = ref<(CustomerListItem & Partial<CustomerSpendingItem>)[]>([]);
 const transactions = ref<AdminTransactionItem[]>([]);
 const auditLogs = ref<AuditLogItem[]>([]);
 
@@ -448,7 +458,13 @@ async function refreshAll() {
 
 async function loadCustomers() {
   await runAction('load-customers', async () => {
-    customers.value = await adminApi.fetchCustomers(customerQuery.value.trim(), blacklistedOnly.value);
+    if (customerQuery.value.trim() || blacklistedOnly.value) {
+      // Dùng API search nếu có filter
+      customers.value = await adminApi.fetchCustomers(customerQuery.value.trim(), blacklistedOnly.value);
+    } else {
+      // Dùng API spending stats nếu chỉ xem tổng quát
+      customers.value = await adminApi.fetchCustomerSpendingStats();
+    }
   });
 }
 
@@ -803,4 +819,22 @@ async function submitEmergencyRefund() {
     display: flex;
   }
 }
+.spent-val {
+  color: #166534;
+}
+
+.pill-rank {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+  min-width: 60px;
+}
+
+.pill-rank.bronze { background: #fee2e2; color: #991b1b; }
+.pill-rank.silver { background: #f1f5f9; color: #475569; border: 1px solid #cbd5e1; }
+.pill-rank.gold { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
+.pill-rank.vip { background: #0f172a; color: #ffffff; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
 </style>

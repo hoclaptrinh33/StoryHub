@@ -6,7 +6,7 @@
 
     <div class="tab-split">
       <aside class="left-panel" :class="{ open: leftOpen }">
-        <div class="panel-card">
+        <div class="panel-card" >
           <h3>Hành động Khuyến mãi</h3>
           <button class="btn-primary" @click="openVoucherCreate">Tạo Voucher</button>
           <button class="btn-primary" @click="openAutoPromoCreate">Tạo Khuyến mãi tự động</button>
@@ -14,7 +14,7 @@
             <span class="material-icons">event</span>
              Tạo Sự kiện Giảm giá
           </button>
-          <button class="btn-ghost" :disabled="isBusy('refresh-all')" @click="refreshAll">
+          <button class="btn-ghost" :disabled="isBusy('refresh-all')" @click="refreshAll" style="align-self: center;">
             {{ isBusy('refresh-all') ? 'Đang tải...' : 'Làm mới tất cả' }}
           </button>
           <p v-if="errorMap['refresh-all']" class="error-text">{{ errorMap['refresh-all'] }}</p>
@@ -370,15 +370,94 @@
 
           <div class="modal-body">
             <div class="action-bar-mini">
+              <div class="search-section">
+                <div class="search-input-wrap">
+                  <span class="material-icons">search</span>
+                  <input 
+                    v-model="searchTitleQuery" 
+                    @input="searchTitles" 
+                    placeholder="Tìm theo tên truyện hoặc ISBN..." 
+                    class="input-search-items"
+                  />
+                  <div v-if="searchingTitles" class="spinner-small"></div>
+                </div>
+                
+                <div v-if="searchResultTitles.length > 0" class="search-results-dropdown">
+                  <div v-for="title in searchResultTitles" :key="title.id" class="search-item-row">
+                    <div class="title-info-mini">
+                      <span class="title-name">{{ title.name }}</span>
+                      <span class="title-meta">ID: {{ title.id }} | {{ title.author }}</span>
+                    </div>
+                    <div class="item-actions-mini">
+                      <button class="btn-mini-add" @click="selectTitleForPromo(title)">
+                        <span class="material-icons">library_add</span>
+                        Áp dụng cả bộ
+                      </button>
+                      <div class="vol-list-mini">
+                        <span class="label">Tập lẻ:</span>
+                        <button 
+                          v-for="vol in title.volumes" 
+                          :key="vol.id" 
+                          class="btn-mini-vol"
+                          @click="selectVolumeForPromo(vol)"
+                          title="Áp dụng riêng tập này"
+                        >
+                          {{ vol.volume_number }}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                
+                <div v-if="searchTitleQuery.length >= 2 && searchResultTitles.length === 0 && !searchingTitles" class="no-results-hint">
+                  Không tìm thấy đầu truyện nào phù hợp
+                </div>
+
+                <!-- Danh sách tất cả truyện để chọn nhanh -->
+                <div v-if="searchResultTitles.length === 0 && !searchingTitles" class="all-titles-suggestion">
+                  <div class="suggestion-header">
+                    <span>Gợi ý / Tất cả đầu truyện:</span>
+                    <span v-if="loadingAllTitles" class="spinner-small"></span>
+                  </div>
+                  <div class="suggestion-grid">
+                    <div v-for="title in allTitles" :key="title.id" class="suggestion-item">
+                      <div class="s-info">
+                        <span class="s-name">{{ title.name }}</span>
+                        <span class="s-meta">ID: {{ title.id }}</span>
+                      </div>
+                      <div class="s-actions">
+                        <button class="btn-s-add" @click="selectTitleForPromo(title)" title="Áp dụng cả bộ">
+                          + Bộ
+                        </button>
+                        <div class="s-vols">
+                          <button 
+                            v-for="vol in title.volumes" 
+                            :key="vol.id" 
+                            class="btn-s-vol"
+                            @click="selectVolumeForPromo(vol)"
+                            :title="`Áp dụng tập ${vol.volume_number}`"
+                          >
+                            {{ vol.volume_number }}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="manual-add-divider">
+                <span>HOẶC NHẬP ID THỦ CÔNG</span>
+              </div>
+
               <div class="add-item-form">
                 <select v-model="newItem.target_type" class="select-lux-mini">
                   <option value="title">Theo Đầu truyện (Toàn bộ tập)</option>
                   <option value="volume">Theo Tập truyện lẻ (Chỉ 1 tập)</option>
                 </select>
-                <input v-model.number="newItem.target_id" type="number" placeholder="Nhập ID (TitleID hoặc VolumeID)..." class="input-lux-mini" />
+                <input v-model.number="newItem.target_id" type="number" placeholder="ID..." class="input-lux-mini" />
                 <button class="btn-add-mini" @click="addItemToPromo" :disabled="isBusy('add-promo-item')">
                   <span class="material-icons">add</span>
-                  Thêm vào
                 </button>
               </div>
             </div>
@@ -423,8 +502,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
-import { StoryHubApiError } from '../../../services/storyhubApi';
-import type { AutoPromoItem, VoucherItem } from '../../../services/storyhubApi';
+import { StoryHubApiError, fetchTitlesWithVolumes } from '../../../services/storyhubApi';
+import type { AutoPromoItem, VoucherItem, TitleEntry } from '../../../services/storyhubApi';
 import { useAdminApi } from '../../../composables/useAdminApi';
 
 type ActionKey =
@@ -545,6 +624,64 @@ const newItem = reactive({
   target_type: 'title' as 'title' | 'volume',
   target_id: null as number | null,
 });
+
+const searchTitleQuery = ref('');
+const searchResultTitles = ref<TitleEntry[]>([]);
+const searchingTitles = ref(false);
+
+const allTitles = ref<TitleEntry[]>([]);
+const loadingAllTitles = ref(false);
+
+async function loadAllTitles() {
+  if (allTitles.value.length > 0) return;
+  loadingAllTitles.value = true;
+  try {
+    allTitles.value = await fetchTitlesWithVolumes();
+  } catch (e) {
+    console.error('Failed to load titles', e);
+  } finally {
+    loadingAllTitles.value = false;
+  }
+}
+
+function selectTitleForPromo(title: TitleEntry) {
+  newItem.target_type = 'title';
+  newItem.target_id = title.id;
+  addItemToPromo();
+}
+
+function selectVolumeForPromo(vol: any) {
+  newItem.target_type = 'volume';
+  newItem.target_id = vol.id;
+  addItemToPromo();
+}
+
+async function searchTitles() {
+  if (searchTitleQuery.value.trim().length < 2) {
+    searchResultTitles.value = [];
+    return;
+  }
+  searchingTitles.value = true;
+  try {
+    searchResultTitles.value = await fetchTitlesWithVolumes(searchTitleQuery.value.trim());
+  } catch (e) {
+    console.error('Search failed', e);
+  } finally {
+    searchingTitles.value = false;
+  }
+}
+
+function selectTitleForPromo(title: TitleEntry) {
+  newItem.target_type = 'title';
+  newItem.target_id = title.id;
+  addItemToPromo();
+}
+
+function selectVolumeForPromo(volume: any) {
+  newItem.target_type = 'volume';
+  newItem.target_id = volume.id;
+  addItemToPromo();
+}
 
 const activeAutoPromoCount = computed(() => autoPromos.value.filter((promo) => promo.is_active).length);
 const activePromoEventCount = computed(() => promotionEvents.value.filter((e) => e.is_active).length);
@@ -875,20 +1012,33 @@ async function savePromoEvent() {
   }
 
   await runAction('save-promo-event', async () => {
-    const payload: any = { ...promoEventModal };
-    delete payload.open;
-    delete payload.mode;
-    if (payload.id === null) delete payload.id;
+    const isCreate = promoEventModal.mode === 'create';
+    const payload: any = {
+      name: promoEventModal.name.trim(),
+      description: promoEventModal.description.trim(),
+      discount_type: promoEventModal.discount_type,
+      discount_value: promoEventModal.discount_value,
+      start_date: promoEventModal.start_date,
+      end_date: promoEventModal.end_date,
+      is_active: promoEventModal.is_active,
+    };
 
-    if (promoEventModal.mode === 'create') {
-      await adminApi.createPromotionEvent(payload);
+    let resp;
+    if (isCreate) {
+      resp = await adminApi.createPromotionEvent(payload);
     } else if (promoEventModal.id !== null) {
-      await adminApi.updatePromotionEvent(promoEventModal.id, payload);
+      resp = await adminApi.updatePromotionEvent(promoEventModal.id, payload);
     }
 
     promoEventModal.open = false;
     emit('notify', { type: 'success', message: 'Lưu sự kiện khuyến mãi thành công.' });
     await loadPromotionEvents();
+
+    // Tự động mở quan lý item nếu là tạo mới
+    if (isCreate && resp?.id) {
+       const newEvent = promotionEvents.value.find(e => e.id === resp.id);
+       if (newEvent) managePromoItems(newEvent);
+    }
   });
 }
 
@@ -907,6 +1057,7 @@ async function managePromoItems(event: any) {
   promoItemsModal.eventName = event.name;
   promoItemsModal.items = [];
   promoItemsModal.open = true;
+  loadAllTitles();
   await loadPromoItems();
 }
 
@@ -982,10 +1133,31 @@ function formatCurrency(val: number) {
 .panel-card {
   border: 1px solid #dbe4f0;
   background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
   border-radius: 16px;
   padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  
 }
-
+.panel-card h3 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  font-size: 1.2rem;
+  color: #1e293b;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+}
+.panel-card h3::before {
+  content: "";
+  width: 4px;
+  height: 18px;
+  background: #2563eb; /* Thanh màu xanh nhấn bên cạnh tiêu đề */
+  margin-right: 10px;
+  border-radius: 4px;
+}
 .card-head {
   display: flex;
   justify-content: space-between;
@@ -1043,14 +1215,72 @@ function formatCurrency(val: number) {
 }
 
 .btn-primary {
-  background: #2563eb;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+  background: #ffffff;
+  color: #475569;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex: 1; /* Để các nút trải đều nếu bọc trong div flex */
+}
+.btn-primary:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #2563eb;
+}
+.btn-primary-lux {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px 24px;
+  border-radius: 12px;
+  border: none;
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
   color: #ffffff;
-  margin-bottom: 8px;
+  font-weight: 700;
+  font-size: 15px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+  transition: all 0.3s ease;
+}
+
+.btn-primary-lux:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.4);
+  filter: brightness(1.1);
+}
+
+/* Nút Làm mới tất cả (Ghost Button) */
+
+
+.btn-ghost:hover:not(:disabled) {
+  color: #64748b;
+}
+
+.btn-ghost:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+/* Thông báo lỗi */
+.error-text {
+  color: #ef4444;
+  font-size: 13px;
+  margin-top: 4px;
+  font-style: italic;
 }
 
 .btn-ghost {
-  background: #e2e8f0;
-  color: #0f172a;
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 8px;
+  align-self: flex-start; /* Nút này nhỏ, nên để sang một bên */
 }
 
 .btn-row {
@@ -1338,5 +1568,262 @@ function formatCurrency(val: number) {
 
 .btn-ghost-lux {
   background: #f1f5f9; color: #475569; border: none; padding: 12px 24px; border-radius: 14px; font-weight: 700; cursor: pointer;
+}
+.search-section {
+  position: relative;
+  flex: 1;
+}
+
+.search-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 8px 12px;
+  transition: all 0.2s;
+}
+
+.search-input-wrap:focus-within {
+  border-color: #2563eb;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.input-search-items {
+  border: none;
+  background: transparent;
+  width: 100%;
+  font-size: 14px;
+  outline: none;
+}
+
+.search-results-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  z-index: 100;
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.search-item-row {
+  padding: 10px;
+  border-bottom: 1px solid #f1f5f9;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.search-item-row:last-child {
+  border-bottom: none;
+}
+
+.title-info-mini {
+  display: flex;
+  flex-direction: column;
+}
+
+.title-name {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.title-meta {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.item-actions-mini {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.btn-mini-add {
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.vol-list-mini {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.vol-list-mini .label {
+  font-size: 10px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.btn-mini-vol {
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn-mini-vol:hover {
+  background: #e2e8f0;
+  border-color: #cbd5e1;
+}
+
+.manual-add-divider {
+  display: flex;
+  align-items: center;
+  margin: 0 8px;
+  font-size: 10px;
+  color: #94a3b8;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.manual-add-divider::before,
+.manual-add-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: #e2e8f0;
+}
+
+.manual-add-divider span {
+  padding: 0 8px;
+}
+
+.no-results-hint {
+  font-size: 12px;
+  color: #94a3b8;
+  padding: 12px;
+  text-align: center;
+}
+
+.spinner-small {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #e2e8f0;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.all-titles-suggestion {
+  margin-top: 16px;
+  border-top: 1px dashed #e2e8f0;
+  padding-top: 12px;
+}
+
+.suggestion-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #64748b;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.suggestion-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.suggestion-item {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.s-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.s-meta {
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+.s-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.btn-s-add {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #2563eb;
+  cursor: pointer;
+}
+
+.btn-s-add:hover {
+  background: #2563eb;
+  color: #ffffff;
+  border-color: #2563eb;
+}
+
+.s-vols {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.btn-s-vol {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-s-vol:hover {
+  background: #f1f5f9;
 }
 </style>
