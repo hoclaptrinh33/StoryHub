@@ -39,7 +39,7 @@
       <div v-if="activeTab === 'items'">
         <div class="header-card">
           <div class="header-left">
-            <h1 class="page-title">📚 Quản lý đầu truyện</h1>
+            <h1 class="page-title"> Quản lý đầu truyện</h1>
             <p class="page-subtitle">Danh mục sách, tập, bản sao và chuyển đổi kho</p>
           </div>
           <div class="header-actions">
