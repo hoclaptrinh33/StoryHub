@@ -989,8 +989,8 @@ function openPromoEventEdit(event: any) {
   promoEventModal.description = event.description || '';
   promoEventModal.discount_type = event.discount_type;
   promoEventModal.discount_value = event.discount_value;
-  promoEventModal.start_date = event.start_date.slice(0, 16);
-  promoEventModal.end_date = event.end_date.slice(0, 16);
+  promoEventModal.start_date = event.start_date ? event.start_date.slice(0, 16) : '';
+  promoEventModal.end_date = event.end_date ? event.end_date.slice(0, 16) : '';
   promoEventModal.is_active = event.is_active;
   promoEventModal.open = true;
 }

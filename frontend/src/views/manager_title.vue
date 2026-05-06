@@ -1098,7 +1098,7 @@ const saveRestock = async () => {
       {
         title_name: selectedBook.value.name,
         author: selectedBook.value.author ?? '',
-        volume_number: restockVolume.value.volume_number,
+        volume_number: Number(restockVolume.value.volume),
         isbn: restockVolume.value.isbn,
         retail_stock: restockQuantity.value,
         p_sell_new: restockVolume.value.price,
