@@ -671,17 +671,7 @@ async function searchTitles() {
   }
 }
 
-function selectTitleForPromo(title: TitleEntry) {
-  newItem.target_type = 'title';
-  newItem.target_id = title.id;
-  addItemToPromo();
-}
 
-function selectVolumeForPromo(volume: any) {
-  newItem.target_type = 'volume';
-  newItem.target_id = volume.id;
-  addItemToPromo();
-}
 
 const activeAutoPromoCount = computed(() => autoPromos.value.filter((promo) => promo.is_active).length);
 const activePromoEventCount = computed(() => promotionEvents.value.filter((e) => e.is_active).length);
