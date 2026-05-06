@@ -444,6 +444,8 @@
             <table class="detail-table">
               <thead>
                 <tr>
+                  <th>Thời gian</th>
+                  <th>Người thực hiện</th>
                   <th>Tập truyện</th>
                   <th class="text-right">Nhập</th>
                   <th class="text-right">Bán</th>
@@ -451,19 +453,21 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="d in selectedPeriodDetails" :key="d.volume_id" class="detail-row">
+                <tr v-for="(d, idx) in selectedPeriodDetails" :key="idx" class="detail-row">
+                  <td class="log-time">{{ formatDateTime(d.created_at) }}</td>
+                  <td class="log-user">{{ d.actor_name }}</td>
                   <td>
                     <div class="volume-info">
                       <div class="volume-name">{{ d.volume_name }}</div>
                       <div class="volume-isbn">{{ d.isbn }}</div>
                     </div>
                   </td>
-                  <td class="text-right value-positive">+{{ d.stock_in.toLocaleString() }}</td>
-                  <td class="text-right value-negative">-{{ d.sale.toLocaleString() }}</td>
-                  <td class="text-right value-warning">-{{ d.rental.toLocaleString() }}</td>
+                  <td class="text-right value-positive">{{ d.stock_in > 0 ? '+' + d.stock_in.toLocaleString() : '-' }}</td>
+                  <td class="text-right value-negative">{{ d.sale > 0 ? '-' + d.sale.toLocaleString() : '-' }}</td>
+                  <td class="text-right value-warning">{{ d.rental > 0 ? '-' + d.rental.toLocaleString() : '-' }}</td>
                 </tr>
                 <tr v-if="selectedPeriodDetails.length === 0">
-                  <td colspan="4" class="text-center">Không có chi tiết cho khoảng thời gian này.</td>
+                  <td colspan="6" class="text-center">Không có chi tiết cho khoảng thời gian này.</td>
                 </tr>
               </tbody>
             </table>

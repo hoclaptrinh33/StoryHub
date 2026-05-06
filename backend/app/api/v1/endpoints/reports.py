@@ -79,6 +79,8 @@ class FluctuationDetailItem(BaseModel):
     stock_in: int
     sale: int
     rental: int
+    created_at: str
+    actor_name: str
 
 
 class FluctuationDetailPayload(BaseModel):
@@ -710,22 +712,26 @@ async def get_fluctuation_details(
             v.id AS volume_id,
             t.name || ' - Tập ' || v.volume_number AS volume_name,
             v.isbn,
-            SUM(stock_in) AS stock_in,
-            SUM(sale) AS sale,
-            SUM(rental) AS rental
+            combined.stock_in,
+            combined.sale,
+            combined.rental,
+            combined.created_at,
+            combined.actor_name
         FROM (
             -- STOCK_IN
             SELECT 
                 CAST(l.target_id AS INTEGER) as volume_id,
-                SUM(l.change_qty) AS stock_in,
+                l.change_qty AS stock_in,
                 0 AS sale,
-                0 AS rental
+                0 AS rental,
+                l.created_at,
+                COALESCE(u.full_name, u.username) AS actor_name
             FROM inventory_log l
+            LEFT JOIN user u ON CAST(u.id AS TEXT) = l.user_id
             WHERE l.action_type = 'STOCK_IN' 
               AND l.target_type = 'VOLUME'
               AND strftime('{date_fmt}', l.created_at) = :period
               AND date(l.created_at) BETWEEN date(:from_date) AND date(:to_date)
-            GROUP BY volume_id
 
             UNION ALL
 
@@ -733,16 +739,18 @@ async def get_fluctuation_details(
             SELECT 
                 {"poi.volume_id" if join_column == "volume_id" else "v.id"} AS volume_id,
                 0 AS stock_in,
-                SUM(poi.quantity) AS sale,
-                0 AS rental
+                poi.quantity AS sale,
+                0 AS rental,
+                po.created_at,
+                COALESCE(u.full_name, u.username) AS actor_name
             FROM pos_order_item poi
             JOIN pos_order po ON po.id = poi.order_id
             {"JOIN volume v ON v.id = poi.volume_id" if join_column == "volume_id" else "JOIN item i ON i.id = poi.item_id JOIN volume v ON v.id = i.volume_id"}
+            LEFT JOIN user u ON u.id = po.created_by_user_id
             WHERE po.status IN ('paid', 'partially_refunded', 'refunded')
               AND po.deleted_at IS NULL
               AND strftime('{date_fmt}', po.created_at) = :period
               AND date(po.created_at) BETWEEN date(:from_date) AND date(:to_date)
-            GROUP BY volume_id
 
             UNION ALL
 
@@ -751,21 +759,22 @@ async def get_fluctuation_details(
                 v.id AS volume_id,
                 0 AS stock_in,
                 0 AS sale,
-                COUNT(*) AS rental
+                1 AS rental,
+                rc.rent_date AS created_at,
+                COALESCE(u.full_name, u.username) AS actor_name
             FROM rental_item ri
             JOIN rental_contract rc ON rc.id = ri.contract_id
             JOIN item i ON i.id = ri.item_id
             JOIN volume v ON v.id = i.volume_id
+            LEFT JOIN user u ON u.id = rc.created_by_user_id
             WHERE rc.deleted_at IS NULL
               AND strftime('{date_fmt}', rc.rent_date) = :period
               AND date(rc.rent_date) BETWEEN date(:from_date) AND date(:to_date)
-            GROUP BY volume_id
         ) combined
         JOIN volume v ON v.id = combined.volume_id
         JOIN title t ON t.id = v.title_id
         {f"WHERE t.id = :title_id" if title_id else ""}
-        GROUP BY v.id, volume_name, v.isbn
-        ORDER BY volume_name ASC;
+        ORDER BY combined.created_at DESC;
     """
 
     params = {"from_date": from_iso, "to_date": to_iso, "period": period}
@@ -782,7 +791,9 @@ async def get_fluctuation_details(
             isbn=row["isbn"],
             stock_in=int(row["stock_in"] or 0),
             sale=int(row["sale"] or 0),
-            rental=int(row["rental"] or 0)
+            rental=int(row["rental"] or 0),
+            created_at=str(row["created_at"]),
+            actor_name=str(row["actor_name"] or "Hệ thống")
         )
         for row in rows
     ]
