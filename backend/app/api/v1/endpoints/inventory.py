@@ -60,6 +60,8 @@ class InventoryItemListItem(BaseModel):
     stock_quantity: int | None = None
     status: str
     type: str
+    promo_type: str | None = None
+    promo_value: int | None = None
 
 
 class InventoryItemStatusPayload(BaseModel):
@@ -368,6 +370,8 @@ async def list_inventory_items(
     auth.require_scope("inventory:read")
 
     query_str = """
+    SELECT raw.*, best_promo.discount_type, best_promo.discount_value
+    FROM (
         SELECT
             v.id AS volume_id,
             v.isbn AS item_id,
@@ -404,6 +408,19 @@ async def list_inventory_items(
         JOIN volume v ON i.volume_id = v.id
         JOIN title t ON v.title_id = t.id
         WHERE i.deleted_at IS NULL
+    ) raw
+    LEFT JOIN (
+        SELECT pi.target_id, pi.target_type, p.discount_type, p.discount_value,
+               ROW_NUMBER() OVER (PARTITION BY pi.target_type, pi.target_id ORDER BY p.discount_value DESC) as rank
+        FROM promotion p
+        JOIN promotion_item pi ON pi.promotion_id = p.id
+        WHERE p.is_active = 1 
+          AND p.start_date <= CURRENT_TIMESTAMP 
+          AND p.end_date >= CURRENT_TIMESTAMP
+    ) best_promo ON (
+        (best_promo.target_type = 'volume' AND best_promo.target_id = raw.volume_id)
+        OR (best_promo.target_type = 'title' AND best_promo.target_id = (SELECT title_id FROM volume WHERE id = raw.volume_id))
+    ) AND best_promo.rank = 1
     """
     
     params: dict[str, object] = {}
@@ -444,6 +461,8 @@ async def list_inventory_items(
             ),
             status=row["status"],
             type=row["type"],
+            promo_type=row.get("discount_type"),
+            promo_value=row.get("discount_value"),
         )
         for row in rows
     ]

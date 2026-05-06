@@ -494,3 +494,65 @@ async def admin_override_customer(
 
     return success_response({"status": "overridden", "customer_id": customer_id})
 
+class CustomerSpendingItem(BaseModel):
+    id: int
+    name: str
+    phone: str
+    membership_level: str
+    deposit_balance: int
+    debt: int
+    blacklist_flag: bool
+    total_spent: int
+    spending_tier: str
+
+
+@router.get("/spending-stats", response_model=ResponseEnvelope[list[CustomerSpendingItem]])
+async def get_customer_spending_stats(
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[list[CustomerSpendingItem]]:
+    """Lấy danh sách khách hàng kèm tổng chi tiêu và xếp loại — Owner only."""
+    auth.require_role("owner")
+    auth.require_scope("admin:read")
+
+    # Tính tổng chi tiêu: (Tổng hóa đơn bán lẻ) + (Tổng phí thuê thực tế đã tất toán)
+    query = """
+        SELECT 
+            c.id, c.name, c.phone, c.membership_level, c.deposit_balance, c.debt, c.blacklist_flag,
+            (
+                COALESCE((
+                    SELECT SUM(po.grand_total) 
+                    FROM pos_order po 
+                    WHERE po.customer_id = c.id AND po.deleted_at IS NULL AND po.status = 'completed'
+                ), 0)
+                +
+                COALESCE((
+                    SELECT SUM(rs.total_fee) 
+                    FROM rental_settlement rs 
+                    JOIN rental_contract rc ON rs.contract_id = rc.id 
+                    WHERE rc.customer_id = c.id AND rc.deleted_at IS NULL
+                ), 0)
+            ) as total_spent
+        FROM customer c
+        WHERE c.deleted_at IS NULL
+        ORDER BY total_spent DESC
+    """
+    
+    result = await session.execute(text(query))
+    rows = result.mappings().all()
+
+    def get_tier(spent: int) -> str:
+        if spent >= 5000000: return "vip"
+        if spent >= 2000000: return "gold"
+        if spent >= 500000: return "silver"
+        return "bronze"
+
+    stats = [
+        CustomerSpendingItem(
+            **dict(row),
+            spending_tier=get_tier(row["total_spent"])
+        )
+        for row in rows
+    ]
+
+    return success_response(stats)

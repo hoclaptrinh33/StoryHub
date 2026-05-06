@@ -28,6 +28,15 @@ import {
   updateSystemUser,
   updateVoucher,
   adminOverrideCustomer,
+  upsertCustomer,
+  fetchPromotionEvents,
+  createPromotionEvent,
+  updatePromotionEvent,
+  deletePromotionEvent,
+  fetchPromotionItems,
+  addPromotionItem,
+  removePromotionItem,
+  fetchCustomerSpendingStats,
 } from '../services/storyhubApi';
 import type {
   AdminCustomerOverrideRequest,
@@ -44,6 +53,9 @@ import type {
   UpdateActivePriceRuleRequest,
   VoucherCreate,
   VoucherItem,
+  PromotionEvent,
+  PromotionItem,
+  CustomerSpendingItem,
 } from '../services/storyhubApi';
 
 type TransactionKind = 'all' | 'sale' | 'rental';
@@ -117,6 +129,10 @@ export function useAdminApi() {
 
     overrideCustomer(customerId: number, payload: AdminCustomerOverrideRequest) {
       return adminOverrideCustomer(customerId, payload, token());
+    },
+
+    upsertCustomer(phone: string, payload: any) {
+      return upsertCustomer(phone, payload, token());
     },
 
     fetchTransactions(params?: {
@@ -258,6 +274,38 @@ export function useAdminApi() {
         },
         token(),
       );
+    },
+
+    fetchPromotionEvents(): Promise<PromotionEvent[]> {
+      return fetchPromotionEvents(token());
+    },
+
+    createPromotionEvent(payload: Partial<PromotionEvent>) {
+      return createPromotionEvent(payload, token());
+    },
+
+    updatePromotionEvent(promoId: number, payload: Partial<PromotionEvent>) {
+      return updatePromotionEvent(promoId, payload, token());
+    },
+
+    deletePromotionEvent(promoId: number) {
+      return deletePromotionEvent(promoId, token());
+    },
+
+    fetchPromotionItems(promoId: number): Promise<PromotionItem[]> {
+      return fetchPromotionItems(promoId, token());
+    },
+
+    addPromotionItem(promoId: number, targetType: 'title' | 'volume', targetId: number) {
+      return addPromotionItem(promoId, { target_type: targetType, target_id: targetId }, token());
+    },
+
+    removePromotionItem(promoId: number, itemId: number) {
+      return removePromotionItem(promoId, itemId, token());
+    },
+
+    fetchCustomerSpendingStats(): Promise<CustomerSpendingItem[]> {
+      return fetchCustomerSpendingStats(token());
     },
   };
 }

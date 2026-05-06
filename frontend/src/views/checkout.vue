@@ -275,13 +275,14 @@
                     </span>
                   </td>
                   <td>
-                    {{
-                      formatCurrency(
-                        item.type === "retail"
-                          ? item.price
-                          : resolveRentPrice(item.price, rentalDays),
-                      )
-                    }}
+                    <div class="price-stack">
+                      <div v-if="hasItemPromo(item)" class="original-price">
+                        {{ formatCurrency(getItemOriginalPrice(item)) }}
+                      </div>
+                      <div :class="{ 'discounted-price': hasItemPromo(item) }">
+                        {{ formatCurrency(getItemFinalPrice(item)) }}
+                      </div>
+                    </div>
                   </td>
                   <td>
                     <button class="btn-delete" @click.stop="removeCartItemAt(index)">
@@ -323,10 +324,42 @@
               <span>Tiền cọc (thuê)</span>
               <strong>{{ formatCurrency(depositTotal) }}</strong>
             </div>
+            <div v-if="voucherInfo" class="line discount">
+              <span>Mã giảm giá ({{ voucherInfo.code }})</span>
+              <strong>-{{ formatCurrency(voucherDiscountTotal) }}</strong>
+            </div>
             <div class="divider"></div>
             <div class="line total">
               <span>Tổng khách đưa</span>
-              <strong>{{ formatCurrency(total) }}</strong>
+              <strong>{{ formatCurrency(grandTotal) }}</strong>
+            </div>
+          </div>
+
+          <div class="voucher-section-lux">
+            <label class="method-label">Mã Voucher / Coupon:</label>
+            <div class="voucher-input-row">
+              <input 
+                v-model="voucherCode" 
+                placeholder="Nhập mã..." 
+                class="field-input"
+                :disabled="!!voucherInfo"
+                @keyup.enter="applyVoucher"
+              />
+              <button 
+                v-if="!voucherInfo" 
+                class="btn-apply-voucher" 
+                :disabled="!voucherCode" 
+                @click="applyVoucher"
+              >
+                ÁP DỤNG
+              </button>
+              <button 
+                v-else 
+                class="btn-remove-voucher" 
+                @click="removeVoucher"
+              >
+                <span class="material-icons">cancel</span>
+              </button>
             </div>
           </div>
 
@@ -560,6 +593,7 @@ import {
   fetchCustomers,
   fetchInventoryItems,
   upsertCustomer,
+  lookupVoucher,
   type CheckoutInvoicePayload,
   type CheckoutInvoiceTransactionType,
   type CustomerListItem,
@@ -643,6 +677,9 @@ const isSplitPayment = ref(false);
 const cashAmount = ref(0);
 const transferAmount = ref(0);
 const rentalDays = ref(3);
+
+const voucherCode = ref("");
+const voucherInfo = ref<any>(null);
 
 const manualCode = ref("");
 const manualBarcodeRef = ref<HTMLInputElement | null>(null);
@@ -785,12 +822,12 @@ const isNewCustomerComplete = computed(() =>
 const salesTotal = computed(() =>
   cart.value
     .filter((item) => item.type === "retail")
-    .reduce((acc, item) => acc + item.price, 0),
+    .reduce((acc, item) => acc + getItemFinalPrice(item), 0),
 );
 const rentalsTotal = computed(() =>
   cart.value
     .filter((item) => item.type === "rental")
-    .reduce((acc, item) => acc + resolveRentPrice(item.price, rentalDays.value), 0),
+    .reduce((acc, item) => acc + getItemFinalPrice(item), 0),
 );
 const depositTotal = computed(() =>
   cart.value
@@ -798,9 +835,47 @@ const depositTotal = computed(() =>
     .reduce((acc, item) => acc + resolveDepositAmount(item.price), 0),
 );
 
-const total = computed(() => salesTotal.value + rentalsTotal.value + depositTotal.value);
+const hasItemPromo = (item: InventoryItemListItem) => !!item.promo_type;
+
+const getItemOriginalPrice = (item: InventoryItemListItem) => {
+  if (item.type === "retail") return item.price;
+  return resolveRentPrice(item.price, rentalDays.value);
+};
+
+const getItemFinalPrice = (item: InventoryItemListItem) => {
+  const base = getItemOriginalPrice(item);
+  if (!item.promo_type || !item.promo_value) return base;
+  
+  if (item.promo_type === "percent") {
+    return (base * (100 - item.promo_value)) / 100;
+  }
+  return Math.max(0, base - item.promo_value);
+};
+
+const voucherDiscountTotal = computed(() => {
+  if (!voucherInfo.value) return 0;
+  const subtotal = salesTotal.value + rentalsTotal.value;
+  if (subtotal < voucherInfo.value.min_spend) return 0;
+
+  let disc = 0;
+  if (voucherInfo.value.voucher_type === "percent") {
+    disc = (subtotal * voucherInfo.value.value) / 100;
+    if (voucherInfo.value.max_discount) {
+      disc = Math.min(disc, voucherInfo.value.max_discount);
+    }
+  } else {
+    disc = voucherInfo.value.value;
+  }
+  return Math.min(disc, subtotal);
+});
+
+const grandTotal = computed(() => {
+  const val = salesTotal.value + rentalsTotal.value + depositTotal.value - voucherDiscountTotal.value;
+  return Math.max(0, Math.round(val));
+});
+
 const splitTotal = computed(() => cashAmount.value + transferAmount.value);
-const splitDelta = computed(() => total.value - splitTotal.value);
+const splitDelta = computed(() => grandTotal.value - splitTotal.value);
 const hasRentalItems = computed(() => cart.value.some((item) => item.type === "rental"));
 // Cảnh báo khi giỏ có sách thuê nhưng chưa đủ thông tin khách
 const showCustomerWarning = computed(() => {
@@ -952,12 +1027,12 @@ const syncSinglePaymentAmount = () => {
   }
 
   if (paymentMethod.value === "transfer") {
-    transferAmount.value = total.value;
+    transferAmount.value = grandTotal.value;
     cashAmount.value = 0;
     return;
   }
 
-  cashAmount.value = total.value;
+  cashAmount.value = grandTotal.value;
   transferAmount.value = 0;
 };
 
@@ -969,7 +1044,7 @@ const getSplitPaymentsPayload = () => {
     return [
       {
         method: toBackendPaymentMethod(paymentMethod.value),
-        amount: total.value,
+        amount: grandTotal.value,
       },
     ];
   }
@@ -1190,6 +1265,30 @@ const openReturnForLatestContract = () => {
   });
 };
 
+const applyVoucher = async () => {
+  const code = voucherCode.value.trim();
+  if (!code) return;
+
+  try {
+    const info = await lookupVoucher(code, token.value);
+    const subtotal = salesTotal.value + rentalsTotal.value;
+    if (subtotal < info.min_spend) {
+      addNotification("warning", `Mã này yêu cầu đơn hàng từ ${formatCurrency(info.min_spend)} trở lên.`);
+      return;
+    }
+    voucherInfo.value = info;
+    addNotification("success", `Đã áp dụng mã giảm giá: ${info.code}`);
+  } catch (e: any) {
+    addNotification("error", e.message || "Mã giảm giá không hợp lệ hoặc đã hết hạn.");
+  }
+};
+
+const removeVoucher = () => {
+  voucherInfo.value = null;
+  voucherCode.value = "";
+  addNotification("info", "Đã gỡ mã giảm giá.");
+};
+
 const resetInvoiceModalState = () => {
   isInvoiceLoading.value = false;
   invoiceLoadError.value = "";
@@ -1339,8 +1438,8 @@ console.log('📜 User scopes:', authStore.user?.scopes);
     const response = await unifiedCheckout({
       customer_id: resolvedCustomerId,
       scanned_codes: cart.value.map((item) => item.code),
-      discount_type: "none",
-      discount_value: 0,
+      discount_type: voucherInfo.value ? voucherInfo.value.voucher_type : "none",
+      discount_value: voucherInfo.value ? voucherInfo.value.value : 0,
       split_payments: getSplitPaymentsPayload(),
       rental_days: Math.max(1, rentalDays.value),
       request_id: buildRequestId("checkout-unified"),
@@ -1469,7 +1568,7 @@ const consumePendingScans = () => {
 let stopScannerWatch: (() => void) | null = null;
 let stopRealtimeWatch: (() => void) | null = null;
 
-watch([total, paymentMethod, isSplitPayment], () => syncSinglePaymentAmount(), {
+watch([grandTotal, paymentMethod, isSplitPayment], () => syncSinglePaymentAmount(), {
   immediate: true,
 });
 
@@ -1600,6 +1699,60 @@ onBeforeUnmount(() => {
   font-size: 2rem;
   color: #0f172a;
   letter-spacing: -0.03em;
+}
+
+/* Voucher Styles */
+.voucher-section-lux {
+  margin-top: 24px;
+  padding: 16px;
+  background: white;
+  border-radius: 16px;
+  border: 1px solid #f1f5f9;
+}
+.voucher-input-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.btn-apply-voucher {
+  background: #0f172a;
+  color: white;
+  border: none;
+  padding: 0 16px;
+  border-radius: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-apply-voucher:disabled {
+  background: #cbd5e1;
+}
+.btn-remove-voucher {
+  background: #fee2e2;
+  color: #ef4444;
+  border: none;
+  width: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.price-stack {
+  display: flex;
+  flex-direction: column;
+}
+.original-price {
+  text-decoration: line-through;
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+.discounted-price {
+  color: #ef4444;
+  font-weight: 700;
+}
+.line.discount strong {
+  color: #22c55e;
 }
 
 .subtitle {

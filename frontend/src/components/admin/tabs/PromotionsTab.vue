@@ -10,6 +10,10 @@
           <h3>Hành động Khuyến mãi</h3>
           <button class="btn-primary" @click="openVoucherCreate">Tạo Voucher</button>
           <button class="btn-primary" @click="openAutoPromoCreate">Tạo Khuyến mãi tự động</button>
+          <button class="btn-primary-lux" @click="openPromoEventCreate">
+            <span class="material-icons">event</span>
+             Tạo Sự kiện Giảm giá
+          </button>
           <button class="btn-ghost" :disabled="isBusy('refresh-all')" @click="refreshAll">
             {{ isBusy('refresh-all') ? 'Đang tải...' : 'Làm mới tất cả' }}
           </button>
@@ -20,7 +24,7 @@
           <h3>Thống kê nhanh</h3>
           <p class="stat-line">Voucher: <strong>{{ vouchers.length }}</strong></p>
           <p class="stat-line">Khuyến mãi tự động: <strong>{{ autoPromos.length }}</strong></p>
-          <p class="stat-line">Đang hoạt động: <strong>{{ activeAutoPromoCount }}</strong></p>
+          <p class="stat-line">Sự kiện đang chạy: <strong>{{ activePromoEventCount }}</strong></p>
         </div>
       </aside>
 
@@ -109,6 +113,63 @@
           </div>
 
           <p v-if="errorMap['load-auto-promos']" class="error-text">{{ errorMap['load-auto-promos'] }}</p>
+        </article>
+
+        <!-- Promotion Events Section -->
+        <article class="panel-card lux-border">
+          <div class="card-head">
+            <h3>Sự kiện Giảm giá (Promotion Events)</h3>
+            <span class="pill">{{ promotionEvents.length }} sự kiện</span>
+          </div>
+
+          <div class="table-wrap">
+            <table class="table table-lux">
+              <thead>
+                <tr>
+                  <th>Tên sự kiện</th>
+                  <th>Giảm giá</th>
+                  <th>Thời hạn</th>
+                  <th>Trạng thái</th>
+                  <th class="text-right">Hành động</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="event in promotionEvents" :key="event.id">
+                  <td>
+                    <div class="event-name-cell">
+                      <span class="name">{{ event.name }}</span>
+                      <span class="desc">{{ event.description || 'Không có mô tả' }}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <span class="discount-val">
+                      {{ event.discount_type === 'percent' ? `-${event.discount_value}%` : `-${formatCurrency(event.discount_value)}` }}
+                    </span>
+                  </td>
+                  <td>
+                    <div class="date-range">
+                      <span>{{ formatDate(event.start_date) }}</span>
+                      <span class="divider">→</span>
+                      <span>{{ formatDate(event.end_date) }}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <span :class="event.is_active ? 'pill-ok' : 'pill-danger'">
+                      {{ event.is_active ? 'Đang chạy' : 'Kết thúc / Khóa' }}
+                    </span>
+                  </td>
+                  <td class="row-actions text-right">
+                    <button class="btn-row" @click="managePromoItems(event)" title="Quản lý đầu truyện">
+                      <span class="material-icons">menu_book</span>
+                    </button>
+                    <button class="btn-row" @click="openPromoEventEdit(event)">Sửa</button>
+                    <button class="btn-row danger" @click="removePromoEvent(event)">Xóa</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-if="errorMap['load-promo-events']" class="error-text">{{ errorMap['load-promo-events'] }}</p>
         </article>
       </div>
     </div>
@@ -235,6 +296,127 @@
           <p v-if="errorMap['save-auto-promo']" class="error-text">{{ errorMap['save-auto-promo'] }}</p>
         </div>
       </div>
+
+      <!-- Modal Promotion Event -->
+      <div v-if="promoEventModal.open" class="modal-overlay">
+        <div class="modal-card modal-wide">
+          <div class="modal-header">
+            <h3>{{ promoEventModal.mode === 'create' ? '✨ Tạo Sự kiện Giảm giá Mới' : '📝 Cập nhật Sự kiện' }}</h3>
+            <button class="btn-close" @click="promoEventModal.open = false">×</button>
+          </div>
+          
+          <div class="modal-body">
+            <div class="form-grid">
+              <div class="form-group span-2">
+                <label class="field-label">Tên sự kiện</label>
+                <input v-model="promoEventModal.name" class="field-input-lux" placeholder="Ví dụ: Lễ hội Manga Hè 2026" />
+              </div>
+              
+              <div class="form-group">
+                <label class="field-label">Loại giảm giá</label>
+                <select v-model="promoEventModal.discount_type" class="field-input-lux">
+                  <option value="percent">Phần trăm (%)</option>
+                  <option value="amount">Số tiền cố định (VNĐ)</option>
+                </select>
+              </div>
+              
+              <div class="form-group">
+                <label class="field-label">Giá trị giảm</label>
+                <input v-model.number="promoEventModal.discount_value" type="number" class="field-input-lux" />
+              </div>
+              
+              <div class="form-group">
+                <label class="field-label">Ngày bắt đầu</label>
+                <input v-model="promoEventModal.start_date" type="datetime-local" class="field-input-lux" />
+              </div>
+              
+              <div class="form-group">
+                <label class="field-label">Ngày kết thúc</label>
+                <input v-model="promoEventModal.end_date" type="datetime-local" class="field-input-lux" />
+              </div>
+              
+              <div class="form-group span-2">
+                <label class="field-label">Mô tả chương trình</label>
+                <textarea v-model="promoEventModal.description" class="field-input-lux" rows="2" placeholder="Nội dung khuyến mãi..."></textarea>
+              </div>
+            </div>
+
+            <label class="field-checkbox mt-4">
+              <input v-model="promoEventModal.is_active" type="checkbox" />
+              <span class="checkbox-custom"></span>
+              Kích hoạt sự kiện ngay lập tức
+            </label>
+          </div>
+
+          <div class="modal-actions">
+            <button class="btn-ghost-lux" @click="promoEventModal.open = false">Hủy bỏ</button>
+            <button class="btn-primary-lux" :disabled="isBusy('save-promo-event')" @click="savePromoEvent">
+              {{ isBusy('save-promo-event') ? 'Đang lưu...' : 'Lưu sự kiện' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal Quản lý Item trong Promotion -->
+      <div v-if="promoItemsModal.open" class="modal-overlay">
+        <div class="modal-card modal-wide">
+          <div class="modal-header">
+            <div class="header-titles">
+              <h3>📚 Áp dụng chương trình: {{ promoItemsModal.eventName }}</h3>
+              <p class="subtitle">Giảm giá cho các đầu truyện hoặc tập truyện cụ thể</p>
+            </div>
+            <button class="btn-close" @click="promoItemsModal.open = false">×</button>
+          </div>
+
+          <div class="modal-body">
+            <div class="action-bar-mini">
+              <div class="add-item-form">
+                <select v-model="newItem.target_type" class="select-lux-mini">
+                  <option value="title">Theo Đầu truyện (Toàn bộ tập)</option>
+                  <option value="volume">Theo Tập truyện lẻ (Chỉ 1 tập)</option>
+                </select>
+                <input v-model.number="newItem.target_id" type="number" placeholder="Nhập ID (TitleID hoặc VolumeID)..." class="input-lux-mini" />
+                <button class="btn-add-mini" @click="addItemToPromo" :disabled="isBusy('add-promo-item')">
+                  <span class="material-icons">add</span>
+                  Thêm vào
+                </button>
+              </div>
+            </div>
+
+            <div class="items-list-scroll">
+              <table class="table-mini">
+                <thead>
+                  <tr>
+                    <th>Loại</th>
+                    <th>ID Đối tượng</th>
+                    <th>Tên đối tượng</th>
+                    <th class="text-right">Hành động</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="item in promoItemsModal.items" :key="item.id">
+                    <td>
+                      <span :class="['type-pill', item.target_type]">
+                        {{ item.target_type === 'title' ? 'Đầu truyện' : 'Tập đơn' }}
+                      </span>
+                    </td>
+                    <td class="font-mono">#{{ item.target_id }}</td>
+                    <td>{{ item.target_name || 'Đang xác định...' }}</td>
+                    <td class="text-right">
+                      <button class="btn-icon-del" @click="removeItemFromPromo(item.id)" :disabled="isBusy('remove-promo-item')">
+                        <span class="material-icons">close</span>
+                      </button>
+                    </td>
+                  </tr>
+                  <tr v-if="promoItemsModal.items.length === 0">
+                    <td colspan="4" class="text-center text-muted py-8">Chưa có đầu truyện nào được áp dụng giảm giá</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
     </Teleport>
   </section>
 </template>
@@ -252,7 +434,13 @@ type ActionKey =
   | 'save-voucher'
   | 'delete-voucher'
   | 'save-auto-promo'
-  | 'delete-auto-promo';
+  | 'delete-auto-promo'
+  | 'load-promo-events'
+  | 'save-promo-event'
+  | 'delete-promo-event'
+  | 'load-promo-items'
+  | 'add-promo-item'
+  | 'remove-promo-item';
 
 type KpiPayload = {
   primaryLabel: string;
@@ -275,6 +463,7 @@ const leftOpen = ref(false);
 
 const vouchers = ref<VoucherItem[]>([]);
 const autoPromos = ref<AutoPromoItem[]>([]);
+const promotionEvents = ref<any[]>([]);
 
 const loadingMap = reactive<Record<ActionKey, boolean>>({
   'refresh-all': false,
@@ -284,6 +473,12 @@ const loadingMap = reactive<Record<ActionKey, boolean>>({
   'delete-voucher': false,
   'save-auto-promo': false,
   'delete-auto-promo': false,
+  'load-promo-events': false,
+  'save-promo-event': false,
+  'delete-promo-event': false,
+  'load-promo-items': false,
+  'add-promo-item': false,
+  'remove-promo-item': false,
 });
 
 const errorMap = reactive<Record<ActionKey, string | null>>({
@@ -294,6 +489,12 @@ const errorMap = reactive<Record<ActionKey, string | null>>({
   'delete-voucher': null,
   'save-auto-promo': null,
   'delete-auto-promo': null,
+  'load-promo-events': null,
+  'save-promo-event': null,
+  'delete-promo-event': null,
+  'load-promo-items': null,
+  'add-promo-item': null,
+  'remove-promo-item': null,
 });
 
 const voucherModal = reactive({
@@ -320,7 +521,33 @@ const autoPromoModal = reactive({
   is_active: true,
 });
 
+const promoEventModal = reactive({
+  open: false,
+  mode: 'create' as 'create' | 'edit',
+  id: null as number | null,
+  name: '',
+  description: '',
+  discount_type: 'percent' as 'percent' | 'amount',
+  discount_value: 0,
+  start_date: '',
+  end_date: '',
+  is_active: true,
+});
+
+const promoItemsModal = reactive({
+  open: false,
+  promoId: null as number | null,
+  eventName: '',
+  items: [] as any[],
+});
+
+const newItem = reactive({
+  target_type: 'title' as 'title' | 'volume',
+  target_id: null as number | null,
+});
+
 const activeAutoPromoCount = computed(() => autoPromos.value.filter((promo) => promo.is_active).length);
+const activePromoEventCount = computed(() => promotionEvents.value.filter((e) => e.is_active).length);
 
 const deleteVoucherModal = reactive({
   open: false,
@@ -411,7 +638,7 @@ async function runAction<T>(key: ActionKey, work: () => Promise<T>) {
 
 async function refreshAll() {
   await runAction('refresh-all', async () => {
-    await Promise.all([loadVouchers(), loadAutoPromotions()]);
+    await Promise.all([loadVouchers(), loadAutoPromotions(), loadPromotionEvents()]);
   });
 }
 
@@ -424,6 +651,12 @@ async function loadVouchers() {
 async function loadAutoPromotions() {
   await runAction('load-auto-promos', async () => {
     autoPromos.value = await adminApi.fetchAutoPromotions();
+  });
+}
+
+async function loadPromotionEvents() {
+  await runAction('load-promo-events', async () => {
+    promotionEvents.value = await adminApi.fetchPromotionEvents();
   });
 }
 
@@ -606,6 +839,114 @@ function removeAutoPromo(promo: AutoPromoItem) {
 function dayName(dayOfWeek: number) {
   const labels = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
   return labels[dayOfWeek] ?? String(dayOfWeek);
+}
+
+// Promotion Event Handlers
+function openPromoEventCreate() {
+  promoEventModal.mode = 'create';
+  promoEventModal.id = null;
+  promoEventModal.name = '';
+  promoEventModal.description = '';
+  promoEventModal.discount_type = 'percent';
+  promoEventModal.discount_value = 10;
+  promoEventModal.start_date = new Date().toISOString().slice(0, 16);
+  promoEventModal.end_date = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16);
+  promoEventModal.is_active = true;
+  promoEventModal.open = true;
+}
+
+function openPromoEventEdit(event: any) {
+  promoEventModal.mode = 'edit';
+  promoEventModal.id = event.id;
+  promoEventModal.name = event.name;
+  promoEventModal.description = event.description || '';
+  promoEventModal.discount_type = event.discount_type;
+  promoEventModal.discount_value = event.discount_value;
+  promoEventModal.start_date = event.start_date.slice(0, 16);
+  promoEventModal.end_date = event.end_date.slice(0, 16);
+  promoEventModal.is_active = event.is_active;
+  promoEventModal.open = true;
+}
+
+async function savePromoEvent() {
+  if (!promoEventModal.name.trim()) {
+    emit('notify', { type: 'error', message: 'Tên sự kiện là bắt buộc.' });
+    return;
+  }
+
+  await runAction('save-promo-event', async () => {
+    const payload: any = { ...promoEventModal };
+    delete payload.open;
+    delete payload.mode;
+    if (payload.id === null) delete payload.id;
+
+    if (promoEventModal.mode === 'create') {
+      await adminApi.createPromotionEvent(payload);
+    } else if (promoEventModal.id !== null) {
+      await adminApi.updatePromotionEvent(promoEventModal.id, payload);
+    }
+
+    promoEventModal.open = false;
+    emit('notify', { type: 'success', message: 'Lưu sự kiện khuyến mãi thành công.' });
+    await loadPromotionEvents();
+  });
+}
+
+async function removePromoEvent(event: any) {
+  if (!confirm(`Bạn có chắc muốn xóa sự kiện "${event.name}"? Tât cả các đầu truyện đã áp dụng sẽ mất khuyến mãi này.`)) return;
+  
+  await runAction('delete-promo-event', async () => {
+    await adminApi.deletePromotionEvent(event.id);
+    emit('notify', { type: 'success', message: 'Đã xóa sự kiện.' });
+    await loadPromotionEvents();
+  });
+}
+
+async function managePromoItems(event: any) {
+  promoItemsModal.promoId = event.id;
+  promoItemsModal.eventName = event.name;
+  promoItemsModal.items = [];
+  promoItemsModal.open = true;
+  await loadPromoItems();
+}
+
+async function loadPromoItems() {
+  if (!promoItemsModal.promoId) return;
+  await runAction('load-promo-items', async () => {
+    promoItemsModal.items = await adminApi.fetchPromotionItems(promoItemsModal.promoId!);
+  });
+}
+
+async function addItemToPromo() {
+  if (!promoItemsModal.promoId || !newItem.target_id) return;
+  
+  await runAction('add-promo-item', async () => {
+    await adminApi.addPromotionItem(promoItemsModal.promoId!, newItem.target_type, newItem.target_id!);
+    emit('notify', { type: 'success', message: 'Đã thêm thành công.' });
+    newItem.target_id = null;
+    await loadPromoItems();
+  });
+}
+
+async function removeItemFromPromo(itemId: number) {
+  if (!promoItemsModal.promoId) return;
+  
+  await runAction('remove-promo-item', async () => {
+    await adminApi.removePromotionItem(promoItemsModal.promoId!, itemId);
+    emit('notify', { type: 'success', message: 'Đã gỡ tập/đầu truyện khỏi sự kiện.' });
+    await loadPromoItems();
+  });
+}
+
+function formatDate(dateStr: string) {
+  return new Date(dateStr).toLocaleString('vi-VN', { 
+    day: '2-digit', month: '2-digit', year: 'numeric', 
+    hour: '2-digit', minute: '2-digit' 
+  });
+}
+
+function formatCurrency(val: number) {
+  return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(val);
 }
 </script>
 
@@ -848,5 +1189,154 @@ function dayName(dayOfWeek: number) {
   .left-panel.open {
     display: flex;
   }
+}
+
+/* Premium Styles for Promotion Events */
+.lux-border {
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  box-shadow: 0 10px 25px -5px rgba(37, 99, 235, 0.1);
+}
+
+.btn-primary-lux {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  color: white;
+  border: none;
+  padding: 12px 20px;
+  border-radius: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: 0.3s;
+  box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+.btn-primary-lux:hover { transform: translateY(-1px); box-shadow: 0 10px 15px -3px rgba(37, 99, 235, 0.3); }
+
+.table-lux th {
+  background: #f1f5f9;
+  color: #475569;
+  font-weight: 800;
+}
+
+.event-name-cell .name { display: block; font-weight: 800; color: #0f172a; }
+.event-name-cell .desc { display: block; font-size: 11px; color: #64748b; }
+
+.discount-val {
+  font-weight: 800;
+  color: #2563eb;
+  font-size: 1.1rem;
+}
+
+.date-range {
+  font-size: 12px;
+  color: #475569;
+  display: flex;
+  flex-direction: column;
+}
+.date-range .divider { color: #94a3b8; font-weight: bold; }
+
+.modal-wide { width: 600px !important; }
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 20px;
+}
+.header-titles h3 { margin: 0; font-size: 1.25rem; font-weight: 800; }
+.header-titles .subtitle { margin: 4px 0 0; font-size: 0.85rem; color: #64748b; }
+
+.btn-close {
+  background: none; border: none; font-size: 24px; color: #94a3b8; cursor: pointer;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.span-2 { grid-column: span 2; }
+
+.field-input-lux {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+  font-family: inherit;
+  font-weight: 600;
+  transition: 0.3s;
+}
+.field-input-lux:focus { border-color: #2563eb; background: white; outline: none; box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.05); }
+
+.action-bar-mini {
+  background: #f1f5f9;
+  padding: 12px;
+  border-radius: 12px;
+  margin-bottom: 16px;
+}
+
+.add-item-form {
+  display: flex;
+  gap: 8px;
+}
+
+.select-lux-mini, .input-lux-mini {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+.input-lux-mini { flex: 1; }
+
+.btn-add-mini {
+  background: #0f172a;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.items-list-scroll {
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.table-mini {
+  width: 100%;
+  border-collapse: collapse;
+}
+.table-mini th { background: #f8fafc; padding: 10px; font-size: 11px; text-transform: uppercase; color: #64748b; }
+.table-mini td { padding: 10px; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
+
+.type-pill {
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+.type-pill.title { background: #dcfce7; color: #166534; }
+.type-pill.volume { background: #eff6ff; color: #1e40af; }
+
+.btn-icon-del {
+  background: none; border: none; color: #94a3b8; cursor: pointer; padding: 4px;
+}
+.btn-icon-del:hover { color: #ef4444; }
+
+.btn-ghost-lux {
+  background: #f1f5f9; color: #475569; border: none; padding: 12px 24px; border-radius: 14px; font-weight: 700; cursor: pointer;
 }
 </style>

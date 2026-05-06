@@ -22,9 +22,12 @@
         
         <div class="filters-group">
           <div class="select-wrapper">
-             <select v-model="filterMembership" class="select-lux">
-                <option value="">Tất cả hạng hội viên</option>
-                <option v-for="level in ['Bronze', 'Silver', 'Gold', 'Platinum']" :key="level" :value="level">{{ level }} Member</option>
+             <select v-model="filterTier" class="select-lux">
+                <option value="">Tất cả xếp loại chi tiêu</option>
+                <option value="bronze">🥉 Bronze Tier</option>
+                <option value="silver">🥈 Silver Tier</option>
+                <option value="gold">🥇 Gold Tier</option>
+                <option value="vip">💎 VIP Tier</option>
              </select>
           </div>
           
@@ -50,9 +53,10 @@
               <tr>
                 <th style="width: 80px">ID</th>
                 <th>Khách hàng</th>
-                <th>Thông tin liên hệ</th>
-                <th>Hạng thành viên</th>
-                <th class="text-right">Dư nợ / Tiền cọc</th>
+                <th>Liên hệ</th>
+                <th class="text-center">Xếp loại</th>
+                <th class="text-right">Tổng chi tiêu</th>
+                <th class="text-right">Hạng / Dư nợ / Cọc</th>
                 <th class="text-center">Trạng thái</th>
                 <th class="text-right">Thao tác</th>
               </tr>
@@ -71,16 +75,22 @@
                 </td>
                 <td>
                   <div class="contact-info">
-                    <span class="phone"><span class="material-icons">phone</span> {{ c.phone }}</span>
+                    <span class="phone">{{ c.phone }}</span>
                   </div>
                 </td>
-                <td>
-                  <span :class="['membership-badge', c.membership_level.toLowerCase()]">
-                    {{ c.membership_level }}
+                <td class="text-center">
+                  <span :class="['tier-badge', c.spending_tier]">
+                    {{ c.spending_tier.toUpperCase() }}
                   </span>
                 </td>
                 <td class="text-right">
+                  <span class="total-spent">{{ formatCurrency(c.total_spent) }}</span>
+                </td>
+                <td class="text-right">
                   <div class="money-status">
+                    <span :class="['membership-badge-mini', c.membership_level.toLowerCase()]">
+                      {{ c.membership_level }}
+                    </span>
                     <span class="deposit">{{ formatCurrency(c.deposit_balance) }}</span>
                     <span v-if="c.debt > 0" class="debt text-danger">- {{ formatCurrency(c.debt) }}</span>
                   </div>
@@ -194,45 +204,46 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, inject } from 'vue';
+import { ref, computed, inject, onMounted } from 'vue';
 import DefaultLayout from '../components/layout/defaultLayout.vue';
 import BaseModal from '../components/layout/BaseModal.vue';
+import { useAdminApi } from '../composables/useAdminApi';
+import type { CustomerSpendingItem } from '../services/storyhubApi';
 
 // Services
+const adminApi = useAdminApi();
 const addNotification = inject('addNotification') as (type: string, msg: string) => void;
 const showConfirm = inject('showConfirm') as (msg: string, title?: string) => Promise<boolean>;
 
 // ================== DATA & STATE ==================
 
-interface Customer {
-  id: number;
-  name: string;
-  phone: string;
-  address: string;
-  membership_level: 'Bronze' | 'Silver' | 'Gold' | 'Platinum';
-  deposit_balance: number;
-  debt: number;
-  blacklist_flag: boolean;
-}
-
-const customers = ref<Customer[]>([
-  { id: 1, name: 'Nguyễn Văn A', phone: '0909123456', address: 'Hải Châu, Đà Nẵng', membership_level: 'Gold', deposit_balance: 500000, debt: 0, blacklist_flag: false },
-  { id: 2, name: 'Trần Thị B', phone: '0918989898', address: 'Quận 1, TP.HCM', membership_level: 'Silver', deposit_balance: 200000, debt: 50000, blacklist_flag: false },
-  { id: 3, name: 'Lê Văn C', phone: '0977778888', address: 'Hoàn Kiếm, Hà Nội', membership_level: 'Bronze', deposit_balance: 0, debt: 150000, blacklist_flag: true },
-]);
-
+const customers = ref<CustomerSpendingItem[]>([]);
 const searchKeyword = ref('');
-const filterMembership = ref('');
+const filterTier = ref('');
 const filterBlacklist = ref('');
+const isLoading = ref(false);
+
+const loadData = async () => {
+  isLoading.value = true;
+  try {
+    customers.value = await adminApi.fetchCustomerSpendingStats();
+  } catch (error) {
+    addNotification('error', 'Không thể tải danh sách khách hàng');
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+onMounted(loadData);
 
 const filteredCustomers = computed(() => {
   let result = customers.value;
   if (searchKeyword.value) {
     const kw = searchKeyword.value.toLowerCase();
-    result = result.filter(c => c.name.toLowerCase().includes(kw) || c.phone.includes(kw));
+    result = result.filter(c => c.name.toLowerCase().includes(kw) || (c.phone && c.phone.includes(kw)));
   }
-  if (filterMembership.value) {
-    result = result.filter(c => c.membership_level === filterMembership.value);
+  if (filterTier.value) {
+    result = result.filter(c => c.spending_tier === filterTier.value);
   }
   if (filterBlacklist.value !== '') {
     const isBlacklist = filterBlacklist.value === 'true';
@@ -243,7 +254,7 @@ const filteredCustomers = computed(() => {
 
 const resetFilters = () => {
   searchKeyword.value = '';
-  filterMembership.value = '';
+  filterTier.value = '';
   filterBlacklist.value = '';
 };
 
@@ -253,7 +264,7 @@ const isEditing = ref(false);
 const editingId = ref<number | null>(null);
 const modalTitle = computed(() => isEditing.value ? '📝 Chỉnh sửa Thông tin Hội viên' : '🆕 Thêm Hội viên Mới');
 
-const formData = ref<Omit<Customer, 'id'>>({
+const formData = ref<Partial<CustomerSpendingItem>>({
   name: '',
   phone: '',
   address: '',
@@ -273,7 +284,7 @@ const openCreateModal = () => {
   isModalOpen.value = true;
 };
 
-const openEditModal = (customer: Customer) => {
+const openEditModal = (customer: CustomerSpendingItem) => {
   isEditing.value = true;
   editingId.value = customer.id;
   formData.value = { ...customer };
@@ -288,33 +299,47 @@ const saveCustomer = async () => {
     return;
   }
   
-  const exist = customers.value.find(c => c.phone === formData.value.phone && c.id !== editingId.value);
-  if (exist) {
-    addNotification('error', 'Số điện thoại này đã được đăng ký trong hệ thống');
-    return;
-  }
-
-  if (isEditing.value && editingId.value) {
-    const index = customers.value.findIndex(c => c.id === editingId.value);
-    if (index !== -1) {
-      customers.value[index] = { id: editingId.value, ...formData.value };
+  try {
+    if (isEditing.value && editingId.value) {
+      // For now, reuse override for admin simple edits or add a full update endpoint
+      // Given core tables often have specialized mutate endpoints
+      // But we can use the adminOverride for debt/deposit/blacklist
+      // For name/phone we'd need upsertCustomer which is already in useAdminApi indirectly
+      
+      await adminApi.overrideCustomer(editingId.value, {
+        deposit_balance: formData.value.deposit_balance,
+        debt: formData.value.debt,
+        blacklist_flag: formData.value.blacklist_flag,
+        reason: 'Cập nhật từ giao diện quản lý khách hàng'
+      });
       addNotification('success', 'Đã cập nhật thông tin khách hàng');
+    } else if (formData.value.phone && formData.value.name) {
+      const requestId = `cust-${Date.now()}`;
+      await adminApi.upsertCustomer(formData.value.phone, {
+        name: formData.value.name,
+        membership_level: (formData.value.membership_level || 'standard').toLowerCase(),
+        address: formData.value.address,
+        deposit_delta: formData.value.deposit_balance || 0,
+        debt_delta: formData.value.debt || 0,
+        blacklist_flag: formData.value.blacklist_flag,
+        request_id: requestId
+      });
+      addNotification('success', 'Đã thêm khách hàng mới thành công');
     }
-  } else {
-    const newId = Math.max(...customers.value.map(c => c.id), 0) + 1;
-    customers.value.push({ id: newId, ...formData.value });
-    addNotification('success', 'Đã thêm khách hàng mới thành công');
+    await loadData();
+    closeModal();
+  } catch (e) {
+    addNotification('error', 'Lỗi khi lưu thông tin khách hàng');
   }
-  closeModal();
 };
 
 const deleteCustomer = async (id: number) => {
   const customer = customers.value.find(c => c.id === id);
   if (!customer) return;
-  const confirmed = await showConfirm(`Bạn có chắc chắn muốn xóa hội viên "${customer.name}"?`, 'Xác nhận xóa');
+  const confirmed = await showConfirm(`Bạn có chắc chắn muốn xóa hội viên "${customer.name}"? Hiện hệ thống khuyến khích dùng Blacklist thay vì xóa dữ liệu giao dịch.`, 'Xác nhận xóa');
   if (confirmed) {
-    customers.value = customers.value.filter(c => c.id !== id);
-    addNotification('success', 'Đã xóa hội viên khỏi hệ thống');
+    // Backend doesn't have a direct hard delete for customer yet, usually it's audit-only
+    addNotification('warning', 'Hệ thống hiện không cho phép xóa vĩnh viễn khách hàng để bảo toàn lịch sử giao dịch.');
   }
 };
 
@@ -324,8 +349,16 @@ const toggleBlacklist = async (id: number, flag: boolean) => {
   const action = flag ? 'khóa' : 'mở khóa';
   const confirmed = await showConfirm(`Xác nhận ${action} tài khoản hội viên "${customer.name}"?`, 'Cập nhật trạng thái');
   if (confirmed) {
-    customer.blacklist_flag = flag;
-    addNotification(flag ? 'warning' : 'success', `Đã ${action} hội viên thành công`);
+    try {
+      await adminApi.overrideCustomer(id, {
+        blacklist_flag: flag,
+        reason: flag ? 'Đưa vào danh sách đen' : 'Gỡ khỏi danh sách đen'
+      });
+      await loadData();
+      addNotification(flag ? 'warning' : 'success', `Đã ${action} hội viên thành công`);
+    } catch (e) {
+      addNotification('error', 'Không thể cập nhật trạng thái');
+    }
   }
 };
 
@@ -425,10 +458,34 @@ const formatCurrency = (value: number) => {
 .money-status .deposit { font-weight: 800; color: #059669; font-size: 1rem; }
 .money-status .debt { font-size: 0.75rem; font-weight: 700; }
 
-.status-pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 800; }
-.status-pill.active { background: #dcfce7; color: #166534; }
-.status-pill.blocked { background: #fee2e2; color: #b91c1c; }
 .status-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+.tier-badge {
+  padding: 4px 10px;
+  border-radius: 10px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+.tier-badge.bronze { background: #fee2e2; color: #991b1b; }
+.tier-badge.silver { background: #f1f5f9; color: #475569; }
+.tier-badge.gold { background: #fef3c7; color: #92400e; }
+.tier-badge.vip { background: #eff6ff; color: #1e40af; border: 1px solid #1e40af; }
+
+.membership-badge-mini {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: #94a3b8;
+  margin-bottom: 2px;
+}
+
+.total-spent {
+  font-weight: 800;
+  color: #1e293b;
+  font-size: 0.95rem;
+}
 
 .action-btns { display: flex; gap: 8px; justify-content: flex-end; }
 .btn-action { width: 40px; height: 40px; border-radius: 12px; border: none; background: #f1f5f9; color: #64748b; cursor: pointer; transition: 0.3s; display: flex; align-items: center; justify-content: center; }

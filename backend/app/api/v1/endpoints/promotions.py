@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -184,6 +183,47 @@ async def delete_voucher(
         )
 
     return success_response({"status": "deleted", "voucher_id": voucher_id})
+
+
+@router.get("/vouchers/lookup", response_model=ResponseEnvelope[dict[str, Any]])
+async def lookup_voucher(
+    code: str,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[dict[str, Any]]:
+    """Tra cứu mã voucher và trả về thông tin chi tiết nếu hợp lệ."""
+    auth.require_role("cashier", "manager", "owner")
+    auth.require_scope("admin:read")
+
+    q = code.upper().strip()
+    result = await session.execute(
+        text("""
+            SELECT id, code, voucher_type, value, min_spend, max_discount, 
+                   max_uses, current_uses, is_active, start_at, end_at
+            FROM voucher
+            WHERE code = :code
+        """),
+        {"code": q}
+    )
+    row = result.mappings().first()
+    if not row:
+        raise AppError(code="VOUCHER_NOT_FOUND", message="Mã giảm giá không tồn tại.", status_code=status.HTTP_404_NOT_FOUND)
+
+    if not row["is_active"]:
+        raise AppError(code="VOUCHER_INACTIVE", message="Mã giảm giá này đã bị tạm ngưng.", status_code=status.HTTP_400_BAD_REQUEST)
+
+    # Check date
+    now = datetime.now().isoformat()
+    if row["start_at"] and row["start_at"] > now:
+        raise AppError(code="VOUCHER_NOT_STARTED", message="Mã giảm giá chưa đến thời gian áp dụng.", status_code=status.HTTP_400_BAD_REQUEST)
+    if row["end_at"] and row["end_at"] < now:
+        raise AppError(code="VOUCHER_EXPIRED", message="Mã giảm giá đã hết hạn.", status_code=status.HTTP_400_BAD_REQUEST)
+
+    # Check uses
+    if row["max_uses"] is not None and row["current_uses"] >= row["max_uses"]:
+        raise AppError(code="VOUCHER_LIMIT_REACHED", message="Mã giảm giá đã hết lượt sử dụng.", status_code=status.HTTP_400_BAD_REQUEST)
+
+    return success_response(dict(row))
 
 
 # ==========================================
@@ -372,3 +412,224 @@ async def delete_auto_promotion(
         )
 
     return success_response({"status": "deleted", "promo_id": promo_id})
+# ==========================================
+# PROMOTION EVENT (Sự kiện Giảm giá)
+# ==========================================
+
+class PromotionEventCreate(BaseModel):
+    name: str = Field(min_length=3, max_length=255)
+    discount_type: str = Field(pattern="^(percent|amount)$")
+    discount_value: int = Field(gt=0)
+    start_date: str
+    end_date: str
+    description: str | None = None
+
+class PromotionEventPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=3, max_length=255)
+    discount_type: str | None = Field(default=None, pattern="^(percent|amount)$")
+    discount_value: int | None = Field(default=None, gt=0)
+    start_date: str | None = None
+    end_date: str | None = None
+    is_active: bool | None = None
+    description: str | None = None
+
+class PromotionItemAdd(BaseModel):
+    target_type: str = Field(pattern="^(title|volume)$")
+    target_id: int
+
+
+@router.get("/events", response_model=ResponseEnvelope[list[dict[str, Any]]])
+async def list_promotion_events(
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[list[dict[str, Any]]]:
+    """Danh sách sự kiện giảm giá — Owner only."""
+    auth.require_role("owner")
+    auth.require_scope("admin:read")
+
+    result = await session.execute(
+        text("SELECT * FROM promotion ORDER BY created_at DESC")
+    )
+    return success_response([dict(r) for r in result.mappings().all()])
+
+
+@router.post("/events", response_model=ResponseEnvelope[dict[str, Any]])
+async def create_promotion_event(
+    payload: PromotionEventCreate,
+    request: Request,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[dict[str, Any]]:
+    auth.require_role("owner")
+    auth.require_scope("admin:write")
+
+    ip_address, device_id = get_request_meta(request)
+    async with session.begin():
+        await session.execute(
+            text("""
+                INSERT INTO promotion (name, discount_type, discount_value, start_date, end_date, description)
+                VALUES (:name, :dtype, :dval, :start, :end, :desc)
+            """),
+            {
+                "name": payload.name,
+                "dtype": payload.discount_type,
+                "dval": payload.discount_value,
+                "start": payload.start_date,
+                "end": payload.end_date,
+                "desc": payload.description,
+            }
+        )
+        new_id_result = await session.execute(text("SELECT last_insert_rowid() AS value;"))
+        new_id = int(new_id_result.scalar_one())
+        
+        await write_audit_log(
+            session, actor_user_id=auth.user_id, action="PROMO_EVENT_CREATED",
+            entity_type="promotion", entity_id=str(new_id),
+            before=None, after=payload.model_dump(), ip_address=ip_address, device_id=device_id,
+        )
+
+    return success_response({"id": new_id})
+
+
+@router.patch("/events/{promo_id}", response_model=ResponseEnvelope[dict[str, Any]])
+async def update_promotion_event(
+    promo_id: int,
+    payload: PromotionEventPatch,
+    request: Request,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[dict[str, Any]]:
+    auth.require_role("owner")
+    auth.require_scope("admin:write")
+
+    existing = await session.execute(text("SELECT * FROM promotion WHERE id = :id"), {"id": promo_id})
+    row = existing.mappings().first()
+    if not row:
+        raise AppError(code="PROMO_NOT_FOUND", message="Không tìm thấy sự kiện giảm giá.", status_code=status.HTTP_404_NOT_FOUND)
+
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        raise AppError(code="NO_CHANGES", message="Vui lòng cung cấp ít nhất một thuộc tính cần cập nhật.", status_code=status.HTTP_400_BAD_REQUEST)
+
+    set_clauses = ["updated_at = CURRENT_TIMESTAMP"]
+    params: dict[str, object] = {"id": promo_id}
+    for field, value in updates.items():
+        set_clauses.append(f"{field} = :{field}")
+        params[field] = (1 if value else 0) if isinstance(value, bool) else value
+
+    ip_address, device_id = get_request_meta(request)
+    async with session.begin():
+        await session.execute(text(f"UPDATE promotion SET {', '.join(set_clauses)} WHERE id = :id"), params)
+        await write_audit_log(
+            session, actor_user_id=auth.user_id, action="PROMO_EVENT_UPDATED",
+            entity_type="promotion", entity_id=str(promo_id),
+            before=dict(row), after=updates, ip_address=ip_address, device_id=device_id,
+        )
+
+    return success_response({"id": promo_id})
+
+
+@router.delete("/events/{promo_id}", response_model=ResponseEnvelope[dict[str, Any]])
+async def delete_promotion_event(
+    promo_id: int,
+    request: Request,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[dict[str, Any]]:
+    auth.require_role("owner")
+    auth.require_scope("admin:write")
+
+    ip_address, device_id = get_request_meta(request)
+    async with session.begin():
+        # promotion_items will be deleted by ON DELETE CASCADE if configured in DB,
+        # but let's be explicit if not sure about manual DB creation details.
+        await session.execute(text("DELETE FROM promotion_item WHERE promotion_id = :id"), {"id": promo_id})
+        await session.execute(text("DELETE FROM promotion WHERE id = :id"), {"id": promo_id})
+        
+        await write_audit_log(
+            session, actor_user_id=auth.user_id, action="PROMO_EVENT_DELETED",
+            entity_type="promotion", entity_id=str(promo_id),
+            before=None, after=None, ip_address=ip_address, device_id=device_id,
+        )
+
+    return success_response({"id": promo_id})
+
+
+@router.get("/events/{promo_id}/items", response_model=ResponseEnvelope[list[dict[str, Any]]])
+async def list_promotion_items(
+    promo_id: int,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[list[dict[str, Any]]]:
+    auth.require_role("owner")
+    auth.require_scope("admin:read")
+
+    # We join with title or volume to show names in UI
+    query = """
+        SELECT pi.*, 
+               CASE 
+                 WHEN pi.target_type = 'title' THEN (SELECT name FROM title WHERE id = pi.target_id)
+                 WHEN pi.target_type = 'volume' THEN (SELECT 'Vol ' || volume_number || ' - ' || (SELECT name FROM title WHERE id = v.title_id) FROM volume v WHERE v.id = pi.target_id)
+               END as target_name
+        FROM promotion_item pi
+        WHERE pi.promotion_id = :promo_id
+    """
+    result = await session.execute(text(query), {"promo_id": promo_id})
+    return success_response([dict(r) for r in result.mappings().all()])
+
+
+@router.post("/events/{promo_id}/items", response_model=ResponseEnvelope[dict[str, Any]])
+async def add_promotion_item(
+    promo_id: int,
+    payload: PromotionItemAdd,
+    request: Request,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[dict[str, Any]]:
+    auth.require_role("owner")
+    auth.require_scope("admin:write")
+
+    ip_address, device_id = get_request_meta(request)
+    async with session.begin():
+        await session.execute(
+            text("""
+                INSERT OR IGNORE INTO promotion_item (promotion_id, target_type, target_id)
+                VALUES (:pid, :ttype, :tid)
+            """),
+            {"pid": promo_id, "ttype": payload.target_type, "tid": payload.target_id}
+        )
+        
+        await write_audit_log(
+            session, actor_user_id=auth.user_id, action="PROMO_ITEM_ADDED",
+            entity_type="promotion", entity_id=str(promo_id),
+            before=None, after=payload.model_dump(), ip_address=ip_address, device_id=device_id,
+        )
+
+    return success_response({"status": "added"})
+
+
+@router.delete("/events/{promo_id}/items/{item_id}", response_model=ResponseEnvelope[dict[str, Any]])
+async def remove_promotion_item(
+    promo_id: int,
+    item_id: int,
+    request: Request,
+    auth: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_db_session),
+) -> ResponseEnvelope[dict[str, Any]]:
+    auth.require_role("owner")
+    auth.require_scope("admin:write")
+
+    ip_address, device_id = get_request_meta(request)
+    async with session.begin():
+        await session.execute(
+            text("DELETE FROM promotion_item WHERE id = :id AND promotion_id = :pid"),
+            {"id": item_id, "pid": promo_id}
+        )
+        
+        await write_audit_log(
+            session, actor_user_id=auth.user_id, action="PROMO_ITEM_REMOVED",
+            entity_type="promotion", entity_id=str(promo_id),
+            before={"item_id": item_id}, after=None, ip_address=ip_address, device_id=device_id,
+        )
+
+    return success_response({"status": "removed"})

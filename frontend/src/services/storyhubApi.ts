@@ -180,6 +180,32 @@ export type CustomerListItem = {
   blacklist_flag: boolean;
 };
 
+export type CustomerSpendingItem = CustomerListItem & {
+  total_spent: number;
+  spending_tier: "bronze" | "silver" | "gold" | "vip";
+};
+
+export type PromotionEvent = {
+  id: number;
+  name: string;
+  discount_type: "percent" | "amount";
+  discount_value: number;
+  start_date: string;
+  end_date: string;
+  is_active: boolean;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PromotionItem = {
+  id: number;
+  promotion_id: number;
+  target_type: "title" | "volume";
+  target_id: number;
+  target_name?: string;
+};
+
 export type UpsertCustomerRequest = {
   name: string;
   membership_level: "standard" | "silver" | "gold" | "vip" | "regular";
@@ -213,6 +239,8 @@ export type InventoryItemListItem = {
   status: string;
   type: "retail" | "rental";
   p_sell_new: number;
+  promo_type?: "percent" | "amount" | null;
+  promo_value?: number | null;
 };
 
 export type InventoryLogItem = {
@@ -540,6 +568,13 @@ export async function unifiedCheckout(
   return request<UnifiedCheckoutPayload>("/api/v1/checkout/unified", {
     method: "POST",
     body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export async function lookupVoucher(code: string, token: string): Promise<any> {
+  return request<any>(`/api/v1/promotions/vouchers/lookup?code=${encodeURIComponent(code)}`, {
+    method: "GET",
     token,
   });
 }
@@ -1319,6 +1354,88 @@ export async function updateSystemUser(
   return request(`/api/v1/system/users/${userId}`, {
     method: "PATCH",
     body: JSON.stringify(payload),
+    token,
+  });
+}
+
+// Admin CRM Extensions
+export async function fetchCustomerSpendingStats(token: string): Promise<CustomerSpendingItem[]> {
+  return request<CustomerSpendingItem[]>("/api/v1/customers/spending-stats", {
+    method: "GET",
+    token,
+  });
+}
+
+// Promotion Event CRUD
+export async function fetchPromotionEvents(token: string): Promise<PromotionEvent[]> {
+  return request<PromotionEvent[]>("/api/v1/promotions/events", {
+    method: "GET",
+    token,
+  });
+}
+
+export async function createPromotionEvent(
+  payload: Partial<PromotionEvent>,
+  token: string,
+): Promise<{ id: number }> {
+  return request<{ id: number }>("/api/v1/promotions/events", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export async function updatePromotionEvent(
+  promoId: number,
+  payload: Partial<PromotionEvent>,
+  token: string,
+): Promise<{ id: number }> {
+  return request<{ id: number }>(`/api/v1/promotions/events/${promoId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export async function deletePromotionEvent(
+  promoId: number,
+  token: string,
+): Promise<{ id: number }> {
+  return request<{ id: number }>(`/api/v1/promotions/events/${promoId}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
+export async function fetchPromotionItems(
+  promoId: number,
+  token: string,
+): Promise<PromotionItem[]> {
+  return request<PromotionItem[]>(`/api/v1/promotions/events/${promoId}/items`, {
+    method: "GET",
+    token,
+  });
+}
+
+export async function addPromotionItem(
+  promoId: number,
+  payload: { target_type: "title" | "volume"; target_id: number },
+  token: string,
+): Promise<{ status: string }> {
+  return request<{ status: string }>(`/api/v1/promotions/events/${promoId}/items`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export async function removePromotionItem(
+  promoId: number,
+  itemId: number,
+  token: string,
+): Promise<{ status: string }> {
+  return request<{ status: string }>(`/api/v1/promotions/events/${promoId}/items/${itemId}`, {
+    method: "DELETE",
     token,
   });
 }
