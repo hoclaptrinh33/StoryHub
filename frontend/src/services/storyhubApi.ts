@@ -84,8 +84,24 @@ export async function request<T>(path: string, options: RequestOptions): Promise
   }
 
   if (!response.ok || payload.success === false || payload.data === undefined) {
+    const errorCode = payload.error?.code ?? "UNKNOWN_ERROR";
+
+    // Auto-logout khi token hết hạn hoặc không hợp lệ
+    if (
+      response.status === 401 ||
+      errorCode === "AUTH_INVALID_TOKEN" ||
+      errorCode === "AUTH_MISSING_TOKEN"
+    ) {
+      localStorage.removeItem("storyhub_token");
+      localStorage.removeItem("storyhub_user");
+      // Chỉ redirect nếu chưa ở trang login (tránh loop)
+      if (!window.location.pathname.includes("/login")) {
+        window.location.href = "/login";
+      }
+    }
+
     throw new StoryHubApiError({
-      code: payload.error?.code ?? "UNKNOWN_ERROR",
+      code: errorCode,
       message:
         payload.error?.message ?? `Yêu cầu thất bại với mã ${response.status}.`,
       status: response.status,
@@ -1436,6 +1452,44 @@ export async function removePromotionItem(
 ): Promise<{ status: string }> {
   return request<{ status: string }>(`/api/v1/promotions/events/${promoId}/items/${itemId}`, {
     method: "DELETE",
+    token,
+  });
+}
+
+// ─── Notifications ───────────────────────────────────────────────────────────
+
+export type NotificationSeverity = "critical" | "warning" | "info" | "action";
+
+export type NotificationItem = {
+  id: string;
+  type: string;
+  severity: NotificationSeverity;
+  title: string;
+  message: string;
+  entity_type: string;
+  entity_id: string;
+  created_at: string;
+  action_url: string;
+};
+
+export type NotificationSummary = {
+  total: number;
+  critical: number;
+  warning: number;
+  info: number;
+  action: number;
+};
+
+export type NotificationsPayload = {
+  notifications: NotificationItem[];
+  summary: NotificationSummary;
+};
+
+export async function fetchNotifications(
+  token = "cashier-demo",
+): Promise<NotificationsPayload> {
+  return request<NotificationsPayload>("/api/v1/notifications", {
+    method: "GET",
     token,
   });
 }

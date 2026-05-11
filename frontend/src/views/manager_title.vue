@@ -1098,14 +1098,19 @@ const deleteBook = async (id: number) => {
 const saveRestock = async () => {
   if (!restockVolume.value || !selectedBook.value) return;
   try {
+    // Fallback isbn: nếu volume không có ISBN, dùng mã nội bộ
+    const isbn = restockVolume.value.isbn && restockVolume.value.isbn.length >= 5
+      ? restockVolume.value.isbn
+      : `NOISBN-${restockVolume.value.id}`;
+
     await apiCreateVolume(
       {
         title_name: selectedBook.value.name,
         author: selectedBook.value.author ?? '',
         volume_number: Number(restockVolume.value.volume),
-        isbn: restockVolume.value.isbn,
+        isbn,
         retail_stock: restockQuantity.value,
-        p_sell_new: restockVolume.value.price,
+        p_sell_new: Number(restockVolume.value.price) || 0,
         description: selectedBook.value.description || '',
         cover_url: null,
         categories: selectedBook.value.genre ? [selectedBook.value.genre] : [],
@@ -1124,6 +1129,7 @@ const saveRestock = async () => {
     addNotification('error', e?.message ?? 'Bổ sung thất bại');
   }
 };
+
 
 // ─── CRUD Volumes ──────────────────────────────────────────────────────────────
 const openAddVolume = () => {

@@ -10,6 +10,7 @@
           <span class="user-name">{{ authStore.user.full_name || authStore.user.username }}</span>
           <span class="user-role">{{ getRoleText(authStore.user.role) }}</span>
         </div>
+        <NotificationBell />
         <button @click="handleLogout" class="logout-btn" title="Đăng xuất">
           <span class="material-icons">logout</span>
         </button>
@@ -34,6 +35,7 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
+import NotificationBell from './NotificationBell.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()

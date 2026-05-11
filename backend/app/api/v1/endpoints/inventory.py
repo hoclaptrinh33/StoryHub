@@ -370,7 +370,7 @@ async def list_inventory_items(
     auth.require_scope("inventory:read")
 
     query_str = """
-    SELECT raw.*, best_promo.discount_type, best_promo.discount_value
+    SELECT raw.*, NULL AS discount_type, NULL AS discount_value
     FROM (
         SELECT
             v.id AS volume_id,
@@ -409,18 +409,6 @@ async def list_inventory_items(
         JOIN title t ON v.title_id = t.id
         WHERE i.deleted_at IS NULL
     ) raw
-    LEFT JOIN (
-        SELECT pi.target_id, pi.target_type, p.discount_type, p.discount_value,
-               ROW_NUMBER() OVER (PARTITION BY pi.target_type, pi.target_id ORDER BY p.discount_value DESC) as rank
-        FROM promotion p
-        JOIN promotion_item pi ON pi.promotion_id = p.id
-        WHERE p.is_active = 1 
-          AND p.start_date <= :now 
-          AND p.end_date >= :now
-    ) best_promo ON (
-        (best_promo.target_type = 'volume' AND best_promo.target_id = raw.volume_id)
-        OR (best_promo.target_type = 'title' AND best_promo.target_id = (SELECT title_id FROM volume WHERE id = raw.volume_id))
-    ) AND best_promo.rank = 1
     """
     
     params: dict[str, object] = {"now": datetime.now().isoformat()}

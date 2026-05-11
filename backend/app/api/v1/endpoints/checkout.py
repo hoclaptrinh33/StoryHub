@@ -796,27 +796,10 @@ async def unified_checkout(
 
 # --------------------- HÀM TRỢ GIÚP ---------------------
 async def _get_promotion_for_volume(session: AsyncSession, volume_id: int) -> dict | None:
-    """Trả về khuyến mãi (discount_type, discount_value) cho volume hoặc title của nó, nếu có."""
-    result = await session.execute(
-        text(
-            """
-            SELECT p.discount_type, p.discount_value
-            FROM promotion p
-            JOIN promotion_item pi ON pi.promotion_id = p.id
-            WHERE (
-                (pi.target_type = 'volume' AND pi.target_id = :volume_id)
-                OR (pi.target_type = 'title' AND pi.target_id = (SELECT title_id FROM volume WHERE id = :volume_id))
-            )
-              AND p.is_active = 1
-              AND p.start_date <= :now
-              AND p.end_date >= :now
-            ORDER BY p.discount_value DESC
-            LIMIT 1
-            """
-        ),
-        {"volume_id": volume_id, "now": datetime.now().isoformat()},
-    )
-    return result.mappings().first()
+    """Trả về khuyến mãi (discount_type, discount_value) cho volume hoặc title của nó, nếu có.
+    Hệ thống hiện tại không sử dụng bảng promotion cũ nên mặc định trả về None.
+    """
+    return None
 
 @router.get(
     "/invoices/{transaction_type}/{reference_id}",

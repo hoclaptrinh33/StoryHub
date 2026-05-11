@@ -1,5 +1,6 @@
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Float,
@@ -307,8 +308,6 @@ class InventoryLog(Base):
     new_qty = Column(Integer, nullable=True)
     note = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-
-    user = relationship("User", foreign_keys=[user_id])
 
 # ==========================================
 # 6. AUTH & USER DOMAIN
