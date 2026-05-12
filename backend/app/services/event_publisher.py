@@ -147,6 +147,23 @@ class EventPublisher:
             branch_id=branch_id,
         )
 
+    async def publish_rental_overdue(
+        self,
+        *,
+        contract_count: int,
+        branch_id: str,
+    ) -> None:
+        payload = {
+            "event_id": f"evt-{uuid4().hex}",
+            "contract_count": contract_count,
+            "notified_at": datetime.now().isoformat() + "Z",
+        }
+        await self._deliver_event(
+            event_name="rental_overdue",
+            payload=payload,
+            branch_id=branch_id,
+        )
+
     async def _publish_with_throttle(
         self,
         *,

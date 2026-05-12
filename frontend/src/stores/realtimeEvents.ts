@@ -34,6 +34,8 @@ export const useRealtimeEventsStore = defineStore("realtime-events", () => {
 
   const latestItemStatusEvent = ref<ItemStatusChangedEvent | null>(null);
   const latestSettlementEvent = ref<RentalSettlementFinishedEvent | null>(null);
+  const latestOverdueEvent = ref<any | null>(null);
+  const latestInventoryChangedEvent = ref<any | null>(null);
 
   const itemStatusUpdates = ref<Record<string, ItemStatusChangedEvent>>({});
   const settlementSnapshots = ref<Record<string, RentalSettlementStatusPayload>>({});
@@ -91,6 +93,17 @@ export const useRealtimeEventsStore = defineStore("realtime-events", () => {
 
     if (message.type === "rental_settlement_finished") {
       upsertSettlementEvent(message);
+      return;
+    }
+
+    if (message.type === "rental_overdue") {
+      latestOverdueEvent.value = message;
+      return;
+    }
+
+    if (message.type === "inventory_data_changed" || message.type === "volume_stock_updated") {
+      latestInventoryChangedEvent.value = message;
+      return;
     }
   };
 
@@ -330,6 +343,8 @@ export const useRealtimeEventsStore = defineStore("realtime-events", () => {
     lastConnectedAt,
     latestItemStatusEvent,
     latestSettlementEvent,
+    latestOverdueEvent,
+    latestInventoryChangedEvent,
     itemStatusUpdates,
     settlementSnapshots,
     isConnected,

@@ -29,7 +29,7 @@ from app.services import (
 
 logger = logging.getLogger(__name__)
 
-async def overdue_checker_task():
+async def overdue_checker_task(app: FastAPI):
     """Background task to automatically mark active contracts as overdue if due_date has passed."""
     while True:
         try:
@@ -46,6 +46,13 @@ async def overdue_checker_task():
                     )
                     if result.rowcount > 0:
                         logger.info(f"Auto-marked {result.rowcount} contracts as overdue.")
+                        try:
+                            await app.state.event_publisher.publish_rental_overdue(
+                                contract_count=result.rowcount,
+                                branch_id="main",  # Assuming single branch for now
+                            )
+                        except Exception as pub_err:
+                            logger.error(f"Failed to publish rental_overdue event: {pub_err}")
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -85,7 +92,7 @@ async def lifespan(app: FastAPI):
     await ensure_runtime_tables()
     
     # Khởi động background task
-    overdue_task = asyncio.create_task(overdue_checker_task())
+    overdue_task = asyncio.create_task(overdue_checker_task(app))
     
     try:
         yield

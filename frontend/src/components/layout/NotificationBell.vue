@@ -40,9 +40,21 @@
           </div>
         </div>
 
+        <div class="panel-tabs" v-if="notifications.length > 0">
+          <button class="tab-btn" :class="{ active: activeTab === 'inventory' }" @click="activeTab = 'inventory'">
+            Số lượng truyện ({{ inventoryNotifications.length }})
+          </button>
+          <button class="tab-btn" :class="{ active: activeTab === 'contracts' }" @click="activeTab = 'contracts'">
+            Hợp đồng ({{ contractNotifications.length }})
+          </button>
+        </div>
+
         <div class="panel-body" v-if="notifications.length > 0">
+          <div v-if="displayedNotifications.length === 0" class="panel-empty-tab">
+            <p>Không có thông báo trong mục này.</p>
+          </div>
           <button
-            v-for="item in notifications"
+            v-for="item in displayedNotifications"
             :key="item.id"
             class="notification-item"
             :class="item.severity"
@@ -79,9 +91,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
+import { useRealtimeEventsStore } from '../../stores/realtimeEvents'
 import {
   fetchNotifications,
   type NotificationItem,
@@ -90,11 +103,15 @@ import {
 
 const router = useRouter()
 const authStore = useAuthStore()
+const realtimeStore = useRealtimeEventsStore()
+const addNotification = inject<any>('addNotification')
 
 const bellRef = ref<HTMLElement | null>(null)
 const isPanelOpen = ref(false)
 const isLoading = ref(false)
 const justUpdated = ref(false)
+
+const activeTab = ref<'inventory' | 'contracts'>('inventory')
 
 const notifications = ref<NotificationItem[]>([])
 const summary = ref<NotificationSummary | null>(null)
@@ -105,13 +122,41 @@ const POLL_INTERVAL_MS = 60_000
 
 // ─── Computed ────────────────────────────────────────────────────────────────
 
+const inventoryNotifications = computed(() => {
+  return notifications.value.filter(n => ['low_stock', 'out_of_stock'].includes(n.type))
+})
+
+const contractNotifications = computed(() => {
+  return notifications.value.filter(n => ['overdue', 'due_soon'].includes(n.type))
+})
+
+const displayedNotifications = computed(() => {
+  return activeTab.value === 'inventory' ? inventoryNotifications.value : contractNotifications.value
+})
+
 const badgeCount = computed(() => {
-  if (!summary.value) return 0
-  return summary.value.critical + summary.value.warning
+  return inventoryNotifications.value.length + contractNotifications.value.length
 })
 
 const hasCritical = computed(() => (summary.value?.critical ?? 0) > 0)
 const hasAlerts = computed(() => badgeCount.value > 0)
+
+// ─── Watchers for Realtime ───────────────────────────────────────────────────
+
+watch(() => realtimeStore.latestOverdueEvent, (evt) => {
+  if (evt) {
+    void loadNotifications()
+    if (addNotification) {
+      addNotification('error', `Có hợp đồng vừa bị quá hạn! Vui lòng kiểm tra.`)
+    }
+  }
+})
+
+watch(() => realtimeStore.latestInventoryChangedEvent, (evt) => {
+  if (evt) {
+    void loadNotifications()
+  }
+})
 
 // ─── Data Fetching ───────────────────────────────────────────────────────────
 
@@ -407,6 +452,47 @@ watch(
   background: #f0fdf4;
   color: #16a34a;
   border: 1px solid #bbf7d0;
+}
+
+/* ─── Panel Tabs ──────────────────────────────────────────────────────────── */
+
+.panel-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 12px;
+  border-bottom: 1px solid rgba(226, 232, 240, 0.6);
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.tab-btn:hover {
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.tab-btn.active {
+  background: #eef2ff;
+  color: #4f46e5;
+  border-color: #c7d2fe;
+}
+
+.panel-empty-tab {
+  padding: 24px;
+  text-align: center;
+  font-size: 13px;
+  color: #94a3b8;
+  font-style: italic;
 }
 
 /* ─── Panel Body ──────────────────────────────────────────────────────────── */

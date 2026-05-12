@@ -62,10 +62,39 @@ export type ServerShutdownMessage = {
   timestamp: string;
 };
 
+export type RentalOverdueEvent = {
+  type: "rental_overdue";
+  event_id: string;
+  contract_count: number;
+  notified_at: string;
+};
+
+export type InventoryDataChangedEvent = {
+  type: "inventory_data_changed";
+  event_id: string;
+  reason: string;
+  changed_at: string;
+};
+
+// 1. THÊM MỚI: Định nghĩa kiểu dữ liệu cho sự kiện cập nhật tồn kho
+export type VolumeStockUpdatedEvent = {
+  type: "volume_stock_updated";
+  event_id: string;
+  // Bạn có thể bổ sung thêm các trường dữ liệu mà backend FastAPI gửi về ở đây
+  // Ví dụ:
+  // volume_id: string;
+  // new_stock_quantity: number;
+  // updated_at: string;
+};
+
+// 2. CẬP NHẬT: Thêm VolumeStockUpdatedEvent vào Union Type chung
 export type RealtimeMessage =
   | ConnectionEstablishedEvent
   | ItemStatusChangedEvent
   | RentalSettlementFinishedEvent
+  | RentalOverdueEvent
+  | InventoryDataChangedEvent
+  | VolumeStockUpdatedEvent // <-- Đã thêm vào đây
   | WsPingMessage
   | WsPongMessage
   | WsSubscriptionStateMessage
