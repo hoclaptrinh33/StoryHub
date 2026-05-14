@@ -474,8 +474,13 @@ async def unified_checkout(
         if payment_total != grand_total:
             raise AppError(
                 code="PAYMENT_MISMATCH",
-                message=f"Số tiền thanh toán thực tế ({payment_total:,}đ) không khớp với tổng tiền phải trả ({grand_total:,}đ).",
+                message=f"Số tiền thanh toán thực tế ({payment_total:,.0f}đ) không khớp với tổng tiền phải trả ({grand_total:,.0f}đ). Vui lòng kiểm tra lại giỏ hàng.",
                 status_code=status.HTTP_400_BAD_REQUEST,
+                details={
+                    "payment_total": payment_total,
+                    "grand_total": grand_total,
+                    "delta": payment_total - grand_total
+                }
             )
 
         order_id_out: str | None = None

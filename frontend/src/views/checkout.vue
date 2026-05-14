@@ -750,7 +750,8 @@ const K_RENT_DAILY = 0.05;
 const K_DEPOSIT = 0.3;
 
 const resolveRentPrice = (sellPrice: number, days: number) => {
-  return Math.max(Math.round(sellPrice * K_RENT_DAILY * days), 2000);
+  const dailyPrice = Math.max(Math.round(sellPrice * K_RENT_DAILY), 2000);
+  return dailyPrice * days;
 };
 
 const resolveDepositAmount = (sellPrice: number) => {
